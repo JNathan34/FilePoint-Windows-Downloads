@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
+using DokanNet;
 using FilePoint.Windows;
 
 internal static class Program
@@ -17,7 +18,8 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        using var api = new FilePointApi(new Uri("https://filepoint.example"), new Fixture());
+        var fixture = new Fixture();
+        using var api = new FilePointApi(new Uri("https://filepoint.example"), fixture);
         try
         {
             api.Login("A + B", "p+%£", "");
@@ -26,6 +28,8 @@ internal static class Program
         catch (VerificationRequiredException) { }
         Require(api.Login("A + B", "p+%£", "123456") == "fixture.header.signature", "Password login");
         Require(api.GetAccount().Scopes[0].Name == "Test source", "Account scopes");
+        Require(api.GetConnectedDevices().Any(device => device.Name == "USB Drive" && device.Status == "ready"),
+            "Use the web app's authenticated device feed");
         Require(api.GetDiskSpace() == new DiskSpace(20_000_000_000, 7_000_000_000),
             "Capacity excludes folder aliases and sources outside the account");
         Require(DriveMount.PickPath(["C:\\"]) == "F:\\" && DriveMount.PickPath(["f:\\"]) == "P:\\",
@@ -60,13 +64,28 @@ internal static class Program
             "Explorer icon metadata");
         Console.WriteLine("Passed API authentication, file ranges, original ICOs and Material icon rendering.");
         UpdateTests.Run().GetAwaiter().GetResult();
+        TestScopedDevices(icons);
 
         if (args.Contains("--native"))
-            TestNative(api, icons);
+            TestNative(api, icons, fixture);
         SignInTests.Run(args);
     }
 
-    private static void TestNative(FilePointApi api, FolderIcons icons)
+    private static void TestScopedDevices(FolderIcons icons)
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        using var api = new FilePointApi(new Uri("https://filepoint.example"),
+            new Fixture { HomeScope = "/Connected devices/USB Drive" });
+        api.UseToken("fixture.header.signature");
+        var drive = new FilePointDrive(api, icons, identity.User!);
+        var info = new MockDokanFileInfo();
+        Require(drive.FindFiles(@"\Connected devices\USB Drive", out var files, info) == DokanResult.Success &&
+            files.Any(file => file.FileName == "portable.txt"), "Scoped devices use paths relative to Home");
+        Require(drive.FindFiles(@"\Connected devices", out var devices, info) == DokanResult.Success &&
+            !devices.Any(device => device.FileName == "Another USB"), "Do not display devices outside the Home scope");
+    }
+
+    private static void TestNative(FilePointApi api, FolderIcons icons, Fixture fixture)
     {
         if (Environment.GetEnvironmentVariable("FILEPOINT_ARCH") is { } architecture)
             Require(RuntimeInformation.ProcessArchitecture.ToString().Equals(architecture, StringComparison.OrdinalIgnoreCase),
@@ -81,7 +100,17 @@ internal static class Program
         try { CheckShellIcon(mount, "FilePoint.ico"); }
         finally { ExplorerIntegration.UnregisterDriveIcon(mount); }
         string source = Path.Combine(mount, "Test source");
-        Require(Directory.GetDirectories(mount).Length == 2 && !Directory.Exists(Path.Combine(mount, "Home")), "Drive scopes");
+        Require(Directory.GetDirectories(mount).Length == 3 && !Directory.Exists(Path.Combine(mount, "Home")), "Drive scopes");
+        string devices = Path.Combine(mount, "Connected devices");
+        string usb = Path.Combine(devices, "USB Drive");
+        Require(Directory.GetDirectories(devices).Length == 2 && !Directory.Exists(Path.Combine(devices, "Locked USB")),
+            "Only ready devices appear in Explorer");
+        CheckShellIcon(devices, FolderIcons.FileName(new IconChoice("devices", null)));
+        CheckShellIcon(usb, FolderIcons.FileName(new IconChoice(null, "/__foldericons/device-icon?kind=usb")));
+        Require(File.ReadAllText(Path.Combine(usb, "PORTABLE.txt")) == "0123456789AB", "Open a device file through Explorer");
+        fixture.DeviceAttached = false;
+        Require(SpinWait.SpinUntil(() => Directory.GetDirectories(devices).Length == 0, TimeSpan.FromSeconds(8)),
+            "Devices disappear after the server reports disconnection and the folder refreshes");
         var rootIcon = api.GetIcons("Home", "").Icons!["Test source"];
         CheckShellIcon(source, FolderIcons.FileName(rootIcon));
         string scoped = Path.Combine(mount, "Scoped source");
@@ -136,6 +165,9 @@ internal static class Program
 
     private sealed class Fixture : HttpMessageHandler
     {
+        internal string HomeScope { get; init; } = "/";
+        internal volatile bool DeviceAttached = true;
+
         protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var uri = request.RequestUri!;
@@ -154,10 +186,23 @@ internal static class Program
             Require(request.Headers.Authorization?.Parameter == "fixture.header.signature", "Bearer authentication");
             return uri.AbsolutePath switch
             {
-                "/api/users" => Text("""
-                    {"username":"Test","scopes":[{"name":"Test source","scope":"/"},{"name":"Home","scope":"/"},
+                "/api/users" => Text($$"""
+                    {"username":"Test","scopes":[{"name":"Test source","scope":"/"},{"name":"Home","scope":"{{HomeScope}}"},
                     {"name":"Scoped source","scope":"/Team space"}]}
                     """),
+                "/__foldericons/devices" => Text(DeviceAttached ? """
+                    {"devices":[
+                       {"name":"USB Drive","path":"Connected devices/USB Drive","source":"Home","status":"ready",
+                        "iconUrl":"/__foldericons/device-icon?kind=usb"},
+                       {"name":"Another USB","path":"Connected devices/Another USB","source":"Home","status":"ready"},
+                       {"name":"Locked USB","path":"Connected devices/Locked USB","source":"Home","status":"locked"},
+                       {"name":"Invalid device","path":"Documents/Invalid device","source":"Home","status":"ready"}]}
+                    """ : """{"devices":[]}"""),
+                "/api/resources" when HomeScope == "/" &&
+                    uri.Query == "?source=Home&path=%2FConnected%20devices%2FUSB%20Drive" =>
+                    Text("""{"files":[{"name":"portable.txt","size":4096}]}"""),
+                "/api/resources" when HomeScope == "/Connected devices/USB Drive" &&
+                    uri.Query == "?source=Home&path=%2F" => Text("""{"files":[{"name":"portable.txt","size":4096}]}"""),
                 "/api/resources" when uri.Query == "?source=Test%20source&path=%2F" => Text("""
                     {"folders":[{"name":"My folder"},{"name":"ICO folder"}],"files":[{"name":"file.txt","size":4096}]}
                     """),
@@ -173,7 +218,8 @@ internal static class Program
                         {"icons":{"Test source":{"url":"/__foldericons/icon?source=Home&path=Test%20source&v=home-test"}},
                          "storage":{"Test source":{"category":"drive","total":20000000000,"free":7000000000},
                                     "Scoped source":{"category":"folder","total":20000000000,"free":7000000000},
-                                    "Other":{"category":"drive","total":10000000000,"free":10000000000}}}
+                                    "Other":{"category":"drive","total":10000000000,"free":10000000000},
+                                    "Connected devices":{"category":"folder"}}}
                         """),
                 "/__foldericons/icons" when uri.Query == "?source=Test%20source&path=" =>
                     Text("""{"icons":{"My folder":{"material":"folder"},"ICO folder":{"url":"/__foldericons/icon?id=fixture"}}}"""),
@@ -188,7 +234,7 @@ internal static class Program
                     Text("""{"icon":""}"""),
                 "/__foldericons/icon" when request.Method == HttpMethod.Head && uri.Query == "?source=Test%20source&path=" =>
                     new(HttpStatusCode.OK) { Headers = { ETag = new EntityTagHeaderValue("\"test-root\"") } },
-                "/__foldericons/icon" => new(HttpStatusCode.OK)
+                "/__foldericons/icon" or "/__foldericons/device-icon" => new(HttpStatusCode.OK)
                 {
                     Content = new ByteArrayContent(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "Assets", "FilePoint.ico")))
                 },
@@ -204,7 +250,8 @@ internal static class Program
 
         private static HttpResponseMessage Download(HttpRequestMessage request)
         {
-            Require(request.RequestUri!.Query == "?source=Test%20source&file=%2Ffile.txt", "Download path encoding");
+            Require(request.RequestUri!.Query is "?source=Test%20source&file=%2Ffile.txt" or
+                "?source=Home&file=%2FConnected%20devices%2FUSB%20Drive%2Fportable.txt", "Download path encoding");
             if (request.Method == HttpMethod.Head)
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {

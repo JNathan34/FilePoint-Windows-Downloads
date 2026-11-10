@@ -15,6 +15,7 @@ namespace FilePoint.Windows;
 internal sealed class FilePointDrive : IDokanOperations
 {
     private const FileAttributes VirtualAttributes = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly;
+    private const string DevicesFolder = "Connected devices";
     private static readonly StringComparer NameComparer = StringComparer.OrdinalIgnoreCase;
     private readonly FilePointApi api;
     private readonly FolderIcons icons;
@@ -27,7 +28,8 @@ internal sealed class FilePointDrive : IDokanOperations
     private DiskSpace? diskSpace;
 
     private sealed record Node(string Name, string Source, string Path, string WindowsPath, bool Directory,
-        long Length, DateTimeOffset Modified, bool Hidden, IconChoice? Icon, byte[]? Data = null, string IconScope = "")
+        long Length, DateTimeOffset Modified, bool Hidden, IconChoice? Icon, byte[]? Data = null, string IconScope = "",
+        bool IsDeviceGroup = false)
     {
         internal FileAttributes Attributes => Directory
             ? FileAttributes.Directory | (Icon is null ? 0 : FileAttributes.ReadOnly) |
@@ -272,12 +274,14 @@ internal sealed class FilePointDrive : IDokanOperations
     }
 
     private CachedDirectory CreateCache(Node folder, DateTimeOffset now) =>
-        new(now.AddSeconds(15), new Lazy<Node[]>(() => List(folder)));
+        new(now.AddSeconds(folder.IsDeviceGroup ? 3 : 15), new Lazy<Node[]>(() => List(folder)));
 
     private Node[] List(Node folder)
     {
         if (folder.Source.Length == 0)
             return ListSources();
+        if (folder.IsDeviceGroup)
+            return ListDevices(folder);
 
         var listing = api.List(folder.Source, folder.Path);
         var manifest = ReadManifest(folder.Source, folder.IconScope + folder.Path);
@@ -288,6 +292,23 @@ internal sealed class FilePointDrive : IDokanOperations
         foreach (var item in listing.Files ?? [])
             AddRemote(item, false);
 
+        AddFolderIcon(folder, entries);
+        return entries.Values.OrderBy(node => node.Name, NameComparer).ToArray();
+
+        void AddRemote(RemoteItem item, bool directory)
+        {
+            if (!ValidName(item.Name) || item.Name is ".plexpoint-recycle-bin" or ".plexpoint-history")
+                return;
+            var entry = new Node(item.Name, folder.Source, folder.Path.TrimEnd('/') + "/" + item.Name,
+                ChildPath(folder, item.Name), directory, Math.Max(item.Size, 0), item.Modified,
+                item.Hidden || hidden.Contains(item.Name), directory ? FindIcon(manifest, item.Name) : null,
+                IconScope: folder.IconScope);
+            entries.TryAdd(item.Name, entry);
+        }
+    }
+
+    private void AddFolderIcon(Node folder, Dictionary<string, Node> entries)
+    {
         if (folder.Icon is { } choice)
         {
             try
@@ -307,19 +328,6 @@ internal sealed class FilePointDrive : IDokanOperations
             }
         }
 
-        return entries.Values.OrderBy(node => node.Name, NameComparer).ToArray();
-
-        void AddRemote(RemoteItem item, bool directory)
-        {
-            if (!ValidName(item.Name) || item.Name is ".plexpoint-recycle-bin" or ".plexpoint-history")
-                return;
-            var entry = new Node(item.Name, folder.Source, folder.Path.TrimEnd('/') + "/" + item.Name,
-                ChildPath(folder, item.Name), directory, Math.Max(item.Size, 0), item.Modified,
-                item.Hidden || hidden.Contains(item.Name), directory ? FindIcon(manifest, item.Name) : null,
-                IconScope: folder.IconScope);
-            entries.TryAdd(item.Name, entry);
-        }
-
         Node Synthetic(string name, byte[] bytes) => new(name, folder.Source, "", ChildPath(folder, name),
             false, bytes.Length, DateTimeOffset.UnixEpoch, true, null, bytes);
     }
@@ -327,9 +335,11 @@ internal sealed class FilePointDrive : IDokanOperations
     private Node[] ListSources()
     {
         var scopes = api.GetAccount().Scopes ?? [];
-        var home = scopes.Any(scope => scope.Name == "Home" && string.IsNullOrEmpty(scope.Scope?.Trim('/')))
+        var homeSource = scopes.FirstOrDefault(scope => scope.Name == "Home");
+        string homeScope = homeSource?.Scope?.Trim('/') ?? "";
+        var home = homeSource is not null && homeScope.Length == 0
             ? ReadManifest("Home", "") : null;
-        return scopes.Where(scope => scope.Name != "Home" && ValidName(scope.Name))
+        var sources = scopes.Where(scope => scope.Name != "Home" && ValidName(scope.Name))
             .DistinctBy(scope => scope.Name, NameComparer)
             .AsParallel().WithDegreeOfParallelism(4)
             .Select(scope =>
@@ -340,7 +350,47 @@ internal sealed class FilePointDrive : IDokanOperations
                 return new Node(scope.Name, scope.Name, "/", @"\" + scope.Name,
                     true, 0, DateTimeOffset.UnixEpoch, false, choice, IconScope: iconScope);
             })
-            .OrderBy(node => node.Name, NameComparer).ToArray();
+            .ToList();
+
+        if ((home?.Storage?.ContainsKey(DevicesFolder) == true || homeScope == DevicesFolder ||
+             homeScope.StartsWith(DevicesFolder + "/", StringComparison.Ordinal)) &&
+            !sources.Any(source => NameComparer.Equals(source.Name, DevicesFolder)))
+        {
+            sources.Add(new Node(DevicesFolder, "Home", "/", ChildPath(root, DevicesFolder), true, 0,
+                DateTimeOffset.UnixEpoch, false, FindIcon(home, DevicesFolder) ?? new IconChoice("devices", null),
+                IconScope: homeScope, IsDeviceGroup: true));
+        }
+
+        return sources.OrderBy(node => node.Name, NameComparer).ToArray();
+    }
+
+    private Node[] ListDevices(Node folder)
+    {
+        ConnectedDevice[] devices;
+        try { devices = api.GetConnectedDevices(); }
+        catch (HttpRequestException error) when (error.StatusCode == HttpStatusCode.NotFound)
+        {
+            devices = [];
+        }
+
+        var entries = new Dictionary<string, Node>(NameComparer);
+        foreach (var device in devices.Take(64))
+        {
+            if (device is not { Source: "Home", Status: "ready", Name: { } name, Path: { } path } ||
+                !ValidName(name) || path != DevicesFolder + "/" + name)
+                continue;
+
+            string scope = folder.IconScope;
+            if (scope.Length != 0 && path != scope && !path.StartsWith(scope + "/", StringComparison.Ordinal))
+                continue;
+            string relative = "/" + path[scope.Length..].TrimStart('/');
+            var icon = device.IconUrl is { } url && url.StartsWith("/__foldericons/device-icon?", StringComparison.Ordinal)
+                ? new IconChoice(null, url) : new IconChoice("usb", null);
+            entries.TryAdd(name, new Node(name, "Home", relative, ChildPath(folder, name), true, 0,
+                DateTimeOffset.UnixEpoch, false, icon, IconScope: scope));
+        }
+        AddFolderIcon(folder, entries);
+        return entries.Values.OrderBy(node => node.Name, NameComparer).ToArray();
     }
 
     private IconChoice? ReadSourceRootIcon(string source, string path)

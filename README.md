@@ -44,6 +44,7 @@
 
 - FilePoint appears in the Explorer sidebar and under **This PC**. It prefers **F:** and uses another available letter if Windows has already assigned it.
 - Custom folder icons appear inside the drive. When the server provides capacity statistics, Explorer shows the total and free space for the drives your account can access.
+- The **Connected devices** folder shows USB drives and phones that the FilePoint server has mounted and your account can access. Refresh the folder after connecting or disconnecting a device.
 - Files open on demand while you’re connected. The Explorer mount is read-only.
 - Minimize FilePoint to keep it in the notification area. Double-click the tray icon to reopen it, or select **Quit FilePoint** to unmount the drive.
 

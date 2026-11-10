@@ -17,6 +17,8 @@ internal sealed record IconManifest(Dictionary<string, IconChoice>? Icons, strin
     Dictionary<string, StorageVolume>? Storage);
 internal sealed record StorageVolume(string? Category, long Total, long Free);
 internal sealed record DiskSpace(long Total, long Free);
+internal sealed record ConnectedDevice(string? Name, string? Path, string? Source, string? Status, string? IconUrl);
+internal sealed record ConnectedDevices(ConnectedDevice[]? Devices);
 internal sealed record SourceScope(string Name, string? Scope);
 internal sealed record Account(string Username, SourceScope[] Scopes);
 internal sealed record FolderIconSetting(string? Icon);
@@ -89,6 +91,8 @@ internal sealed class FilePointApi : IDisposable
 
     internal IconManifest GetIcons(string source, string path) =>
         Get<IconManifest>(IconQuery("/__foldericons/icons", source, path));
+
+    internal ConnectedDevice[] GetConnectedDevices() => Get<ConnectedDevices>("/__foldericons/devices").Devices ?? [];
 
     internal DiskSpace? GetDiskSpace()
     {
