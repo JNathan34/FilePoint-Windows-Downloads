@@ -1,0 +1,183 @@
+name: Windows
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test FilePoint and GitHub update APIs
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: dotnet run --project tests -c Release
+      - name: Build and validate setup
+        shell: pwsh
+        run: ./installer/Build.ps1 -Architecture ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FilePoint-Windows-${{ matrix.arch }}
+          path: |
+            artifacts/FilePoint-Setup-${{ matrix.arch }}.exe
+            artifacts/FilePoint-Windows-${{ matrix.arch }}.msi
+            artifacts/SHA256SUMS-${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+  install:
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { installation: fresh, arch: x64, runner: windows-2025 }
+          - { installation: upgrade, arch: x64, runner: windows-2025 }
+          - { installation: fresh, arch: arm64, runner: windows-11-arm }
+    env:
+      FILEPOINT_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+          architecture: ${{ matrix.arch }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: FilePoint-Windows-${{ matrix.arch }}
+          path: artifacts
+      - name: Install the previous stable release for the upgrade test
+        if: matrix.installation == 'upgrade'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = [version](([xml](Get-Content 'src/FilePoint.Windows/FilePoint.Windows.csproj' -Raw)).Project.PropertyGroup.Version)
+          $tags = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --paginate --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name'
+          $previous = $tags | Where-Object { $_ -cmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -and [version]$_.Substring(1) -lt $version } |
+              Sort-Object { [version]$_.Substring(1) } -Descending | Select-Object -First 1
+          if (!$previous) { throw "No stable release older than $version is available for the upgrade test." }
+          gh release download $previous --pattern FilePoint-Setup-x64.exe --dir "$env:RUNNER_TEMP"
+          $previousSetup = Join-Path $env:RUNNER_TEMP 'FilePoint-Setup-x64.exe'
+          $process = Start-Process $previousSetup -ArgumentList @('/quiet', '/norestart') -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Previous setup exited with $($process.ExitCode)" }
+          $settings = Join-Path $env:LOCALAPPDATA 'FilePoint.Windows'
+          New-Item -Path $settings -ItemType Directory -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $settings 'connection.bin') -Value 'upgrade-marker' -NoNewline
+      - name: Install app and driver with the single setup executable
+        shell: pwsh
+        env:
+          INSTALLATION: ${{ matrix.installation }}
+        run: |
+          $setup = (Resolve-Path "artifacts/FilePoint-Setup-$env:FILEPOINT_ARCH.exe").Path
+          $driver = Join-Path $env:windir 'System32/dokan2.dll'
+          if ($env:INSTALLATION -eq 'fresh' -and (Test-Path -LiteralPath $driver)) {
+              throw 'The fresh install test requires a clean driver install.'
+          }
+          $log = Join-Path $env:RUNNER_TEMP 'FilePoint-setup.log'
+          $p = Start-Process $setup -ArgumentList @('/quiet', '/norestart', '/log', ('"' + $log + '"')) -WindowStyle Hidden -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+              Get-Content -LiteralPath $log -Tail 100
+              throw "Setup exited with $($p.ExitCode)"
+          }
+          if (!(Test-Path -LiteralPath $driver)) { throw 'Setup did not install Dokan' }
+          $program = Join-Path $env:LOCALAPPDATA 'Programs/FilePoint Windows/FilePoint.Windows.exe'
+          $kernelDriver = Join-Path $env:windir 'System32/drivers/dokan2.sys'
+          $machine = if ($env:FILEPOINT_ARCH -eq 'arm64') { 0xAA64 } else { 0x8664 }
+          foreach ($file in @($setup, $program, $kernelDriver)) {
+              $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($file))
+              try {
+                  $reader.BaseStream.Position = 0x3c
+                  $reader.BaseStream.Position = $reader.ReadInt32() + 4
+                  if ($reader.ReadUInt16() -ne $machine) { throw "Unexpected architecture for $file" }
+              }
+              finally { $reader.Dispose() }
+          }
+          $version = ([xml](Get-Content 'src/FilePoint.Windows/FilePoint.Windows.csproj' -Raw)).Project.PropertyGroup.Version
+          if ((Get-Item -LiteralPath $program).VersionInfo.FileVersion -ne "$version.0") {
+              throw 'Setup did not install the expected app version'
+          }
+          if ($env:INSTALLATION -eq 'upgrade') {
+              $settings = Join-Path $env:LOCALAPPDATA 'FilePoint.Windows/connection.bin'
+              if ((Get-Content -LiteralPath $settings -Raw) -ne 'upgrade-marker') { throw 'Setup did not preserve saved FilePoint credentials' }
+          }
+          $gui = Start-Process -FilePath $program -WindowStyle Hidden -PassThru
+          try {
+              if (!$gui.WaitForInputIdle(15000) -or $gui.HasExited) { throw 'The installed FilePoint window did not start' }
+          }
+          finally {
+              if (!$gui.HasExited -and (!$gui.CloseMainWindow() -or !$gui.WaitForExit(5000))) { Stop-Process -Id $gui.Id }
+              $gui.WaitForExit()
+          }
+          $app = Start-Process -FilePath $program -ArgumentList '--remove-integration' -WindowStyle Hidden -Wait -PassThru
+          if ($app.ExitCode -ne 0) { throw "Installed FilePoint exited with $($app.ExitCode)" }
+      - name: Test mounted drive and Shell icons
+        shell: pwsh
+        run: dotnet run --project tests -c Release --arch $env:FILEPOINT_ARCH -- --native
+      - name: Uninstall FilePoint and keep the shared driver
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path "artifacts/FilePoint-Setup-$env:FILEPOINT_ARCH.exe").Path
+          $log = Join-Path $env:RUNNER_TEMP 'FilePoint-uninstall.log'
+          $p = Start-Process $setup -ArgumentList @('/uninstall', '/quiet', '/norestart', '/log', ('"' + $log + '"')) -WindowStyle Hidden -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+              Get-Content -LiteralPath $log -Tail 100
+              throw "Setup uninstall exited with $($p.ExitCode)"
+          }
+          if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Programs/FilePoint Windows/FilePoint.Windows.exe')) {
+              throw 'FilePoint was not uninstalled'
+          }
+          if (!(Test-Path -LiteralPath (Join-Path $env:windir 'System32/dokan2.dll'))) {
+              throw 'FilePoint uninstalled the shared driver'
+          }
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, install]
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: FilePoint-Windows-*
+          merge-multiple: true
+          path: artifacts
+      - name: Publish the stable GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = ([xml](Get-Content 'src/FilePoint.Windows/FilePoint.Windows.csproj' -Raw)).Project.PropertyGroup.Version
+          if ($tag -ne "v$version" -or $tag -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Git tag and app version must match' }
+          $notes = @'
+          Download **FilePoint-Setup-arm64.exe** for Windows 11 laptops with Snapdragon X Elite or other ARM64 processors. Download **FilePoint-Setup-x64.exe** for Intel or AMD x64 PCs.
+
+          Run Setup and select **Install**. Setup downloads the matching signed Dokan driver if needed. Close FilePoint from its notification-area menu before starting a manual upgrade.
+
+          FilePoint adds your folders and custom icons to File Explorer. It opens files read-only while connected to your FilePoint server.
+
+          Setup is unsigned. The release includes SHA-256 checksums and an MSI for managed installations with Dokan already installed. The app’s **Updates** window links here and supports verified in-app downloads.
+          '@
+          if (Test-Path -LiteralPath "docs/releases/$tag.md") {
+              $notes = Get-Content -LiteralPath "docs/releases/$tag.md" -Raw
+          }
+          $notesFile = Join-Path $env:RUNNER_TEMP 'FilePoint-release-notes.md'
+          Set-Content -LiteralPath $notesFile -Value $notes -Encoding utf8
+          Get-Content artifacts/SHA256SUMS-x64.txt, artifacts/SHA256SUMS-arm64.txt |
+              Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+          gh release create $tag artifacts/FilePoint-Setup-x64.exe artifacts/FilePoint-Setup-arm64.exe artifacts/FilePoint-Windows-x64.msi artifacts/FilePoint-Windows-arm64.msi artifacts/SHA256SUMS.txt --verify-tag --latest --title "FilePoint for Windows $version" --notes-file $notesFile

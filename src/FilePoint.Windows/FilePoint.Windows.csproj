@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>FilePoint.Windows</AssemblyName>
+    <ApplicationIcon>Assets\FilePoint.ico</ApplicationIcon>
+    <Version>1.4.6</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="FilePoint.Windows.Tests" />
+    <PackageReference Include="DokanNet" Version="2.3.0.3" />
+    <None Update="Assets\*" CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+</Project>

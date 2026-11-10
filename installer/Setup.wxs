@@ -1,0 +1,29 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Bundle Name="FilePoint for Windows" Manufacturer="PlexPoint" Version="$(var.AppVersion)"
+          UpgradeCode="F2069E9C-0D6C-40FA-A8AF-5B43002311A1"
+          IconSourceFile="$(var.PublishDir)\Assets\FilePoint.ico"
+          AboutUrl="https://github.com/JNathan34/FilePoint-Windows-Downloads"
+          UpdateUrl="https://github.com/JNathan34/FilePoint-Windows-Downloads/releases/latest">
+    <bal:Condition Condition="NativeMachine = $(var.NativeMachine)"
+                   Message="This is the $(var.Architecture) installer. Download the Setup that matches your PC from FilePoint's GitHub Releases." />
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication Theme="hyperlinkLicense" LicenseUrl=""
+          ThemeFile="installer\SetupTheme.xml" LogoFile="$(var.PublishDir)\Assets\FilePoint.png"
+          SuppressOptionsUI="yes"
+          LaunchTarget="[LocalAppDataFolder]Programs\FilePoint Windows\FilePoint.Windows.exe" />
+      <Payload Name="setup.ico" SourceFile="$(var.PublishDir)\Assets\FilePoint.ico" />
+      <Payload Name="header.png" SourceFile="installer\Artwork\header.png" />
+      <Payload Name="complete.png" SourceFile="installer\Artwork\complete.png" />
+    </BootstrapperApplication>
+    <util:FileSearch Id="FindDokan" Variable="DokanVersion" Path="[System64Folder]dokan2.dll" Result="version" />
+    <Chain>
+      <MsiPackage Id="Dokan" SourceFile="$(var.DriverPath)" Compressed="no"
+                  DownloadUrl="$(var.DriverUrl)" DisplayName="Dokan file system driver"
+                  InstallCondition="NOT DokanVersion OR DokanVersion &lt; v2.3.1.1000"
+                  Permanent="yes" Visible="yes" />
+      <MsiPackage Id="FilePoint" SourceFile="$(var.ClientMsi)" Compressed="yes" />
+    </Chain>
+  </Bundle>
+</Wix>

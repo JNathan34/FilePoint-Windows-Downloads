@@ -1,0 +1,65 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="FilePoint for Windows" Manufacturer="PlexPoint" Version="$(var.AppVersion)"
+           UpgradeCode="2C42F829-8DEA-4D62-AE3A-5EB168765960" Scope="perUser" Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of FilePoint is already installed." Schedule="afterInstallExecute" />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="FilePointIcon" SourceFile="$(var.PublishDir)\Assets\FilePoint.ico" />
+    <Property Id="ARPPRODUCTICON" Value="FilePointIcon" />
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="Programs" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="FilePoint Windows">
+          <Component Id="Client" Guid="F5B10650-8D73-4EC3-91B7-4BE081478C71">
+            <RegistryValue Root="HKCU" Key="Software\PlexPoint\FilePointWindows"
+                           Name="ClientInstalled" Type="integer" Value="1" KeyPath="yes" />
+            <File Source="$(var.PublishDir)\FilePoint.Windows.exe" DefaultLanguage="1033" />
+            <RemoveFolder Id="RemoveInstallFolder" On="uninstall" />
+            <RemoveFolder Id="RemoveProgramsIfEmpty" Directory="Programs" On="uninstall" />
+          </Component>
+          <Directory Id="Assets" Name="Assets">
+            <Component Id="ClientAssets" Guid="9A6C2FCA-C47B-47BD-87FB-B6A070790227">
+              <RegistryValue Root="HKCU" Key="Software\PlexPoint\FilePointWindows"
+                             Name="AssetsInstalled" Type="integer" Value="1" KeyPath="yes" />
+              <File Source="$(var.PublishDir)\Assets\FilePoint.ico" />
+              <File Source="$(var.PublishDir)\Assets\FilePoint.png" />
+              <File Source="$(var.PublishDir)\Assets\DokanNet-LICENSE.txt" />
+              <File Source="$(var.PublishDir)\Assets\MaterialSymbols-LICENSE.txt" />
+              <File Source="$(var.PublishDir)\Assets\MaterialSymbolsOutlined.codepoints" />
+              <File Source="$(var.PublishDir)\Assets\MaterialSymbolsOutlined.ttf" DefaultLanguage="1033" />
+              <RemoveFolder Id="RemoveAssets" On="uninstall" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="Settings" Name="FilePoint.Windows">
+        <Component Id="LocalSettings" Guid="A1942AD4-604F-4096-A16A-0942D1A332FB">
+          <RegistryValue Root="HKCU" Key="Software\PlexPoint\FilePointWindows"
+                         Name="SettingsInstalled" Type="integer" Value="1" KeyPath="yes" />
+          <RemoveFile Id="SavedConnection" Name="connection.bin" On="uninstall" />
+          <RemoveFile Id="PendingConnection" Name="connection.bin.tmp" On="uninstall" />
+          <RemoveFile Id="SavedGitHubToken" Name="github.bin" On="uninstall" />
+          <RemoveFile Id="PendingGitHubToken" Name="github.bin.tmp" On="uninstall" />
+          <RemoveFolder Id="RemoveSettingsFolder" On="uninstall" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <Feature Id="Main" Title="FilePoint for Windows" Level="1">
+      <ComponentRef Id="Client" />
+      <ComponentRef Id="ClientAssets" />
+      <ComponentRef Id="ShellEntries" />
+      <ComponentRef Id="LocalSettings" />
+    </Feature>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="ShellEntries" Guid="F54E2426-08DA-494C-9B38-FB24B51D91FB">
+        <Shortcut Id="StartFilePoint" Name="FilePoint for Windows"
+                  Target="[INSTALLFOLDER]FilePoint.Windows.exe"
+                  WorkingDirectory="INSTALLFOLDER" Icon="FilePointIcon" />
+        <RegistryValue Root="HKCU" Key="Software\PlexPoint\FilePointWindows"
+                       Name="Installed" Type="integer" Value="1" KeyPath="yes" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\Classes\CLSID\{5EF65D30-CF81-48D7-9A7D-3E0F113124D8}" Action="removeOnUninstall" />
+        <RemoveRegistryKey Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\{5EF65D30-CF81-48D7-9A7D-3E0F113124D8}" Action="removeOnUninstall" />
+        <RemoveRegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel"
+                             Name="{5EF65D30-CF81-48D7-9A7D-3E0F113124D8}" />
+      </Component>
+    </StandardDirectory>
+  </Package>
+</Wix>

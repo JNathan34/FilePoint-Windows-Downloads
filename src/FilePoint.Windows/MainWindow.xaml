@@ -1,0 +1,142 @@
+<Window x:Class="FilePoint.Windows.MainWindow" x:ClassModifier="internal"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="FilePoint" Width="444" SizeToContent="Height"
+        ResizeMode="CanMinimize" ShowInTaskbar="False" WindowStartupLocation="CenterScreen"
+        Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}"
+        FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="14"
+        UseLayoutRounding="True" SnapsToDevicePixels="True">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  Background="{StaticResource WindowBrush}">
+        <StackPanel Margin="28,19,28,26">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <Image x:Name="BrandLogo" Width="32" Height="32" Stretch="Uniform" />
+                    <TextBlock Text="FilePoint" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Margin="9,0,0,1" />
+                </StackPanel>
+                <Button x:Name="MoreButton" Grid.Column="1" Width="34" Height="32" Padding="0"
+                        Style="{StaticResource QuietButton}" ToolTip="Options"
+                        AutomationProperties.Name="FilePoint options" KeyboardNavigation.TabIndex="20" Click="OpenOptions">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Ellipse Width="3" Height="3" Fill="{StaticResource MutedBrush}" />
+                            <Ellipse Width="3" Height="3" Margin="4,0" Fill="{StaticResource MutedBrush}" />
+                            <Ellipse Width="3" Height="3" Fill="{StaticResource MutedBrush}" />
+                        </StackPanel>
+                        <Ellipse x:Name="UpdateBadge" Width="6" Height="6" Fill="{StaticResource FocusBrush}"
+                                 Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,5,5,0" />
+                    </Grid>
+                </Button>
+            </Grid>
+
+            <Border Height="1" Background="{StaticResource DividerBrush}" Margin="0,14,0,19" />
+            <TextBlock x:Name="Heading" Text="Sign in" FontSize="26" FontWeight="SemiBold" Margin="0,0,0,4" />
+            <TextBlock x:Name="Introduction" Text="Open your FilePoint folders in File Explorer."
+                       Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,20" />
+
+                <StackPanel>
+                    <StackPanel x:Name="SignInPanel">
+                        <StackPanel x:Name="Credentials">
+                            <Label x:Name="AddressLabel" Content="Server URL" Target="{Binding ElementName=AddressBox}" />
+                            <TextBox x:Name="AddressBox" Text="https://files.plexpoint.uk" KeyboardNavigation.TabIndex="0"
+                                     AutomationProperties.LabeledBy="{Binding ElementName=AddressLabel}" />
+
+                            <StackPanel x:Name="PasswordFields">
+                                <Label x:Name="UsernameLabel" Content="Username" Target="{Binding ElementName=UsernameBox}" Margin="0,13,0,7" />
+                                <TextBox x:Name="UsernameBox" KeyboardNavigation.TabIndex="1"
+                                         AutomationProperties.LabeledBy="{Binding ElementName=UsernameLabel}" />
+                                <Label x:Name="PasswordLabel" Content="Password" Target="{Binding ElementName=PasswordInput}" Margin="0,13,0,7" />
+                                <Border BorderThickness="1" CornerRadius="6">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource FieldBrush}" />
+                                            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+                                            <Style.Triggers>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource FocusedFieldBrush}" />
+                                                    <Setter Property="BorderBrush" Value="{StaticResource FocusBrush}" />
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <PasswordBox x:Name="PasswordInput" KeyboardNavigation.TabIndex="2" MinHeight="38"
+                                                     Background="Transparent" BorderThickness="0"
+                                                     AutomationProperties.LabeledBy="{Binding ElementName=PasswordLabel}" />
+                                        <TextBox x:Name="RevealedPassword" KeyboardNavigation.TabIndex="2" MinHeight="38"
+                                                 Visibility="Collapsed" Background="Transparent" BorderThickness="0"
+                                                 IsUndoEnabled="False" SpellCheck.IsEnabled="False"
+                                                 AutomationProperties.LabeledBy="{Binding ElementName=PasswordLabel}" />
+                                        <Button x:Name="PasswordVisibilityButton" Grid.Column="1" KeyboardNavigation.TabIndex="3"
+                                                Margin="3" MinWidth="54" Padding="7,0" Click="TogglePasswordVisibility">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource QuietButton}">
+                                                    <Setter Property="Content" Value="Show" />
+                                                    <Setter Property="AutomationProperties.Name" Value="Show password" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Visibility, ElementName=RevealedPassword}" Value="Visible">
+                                                            <Setter Property="Content" Value="Hide" />
+                                                            <Setter Property="AutomationProperties.Name" Value="Hide password" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                        </Button>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                            <StackPanel x:Name="TokenFields" Visibility="Collapsed">
+                                <Label x:Name="TokenLabel" Content="FilePoint API token" Target="{Binding ElementName=TokenInput}" Margin="0,15,0,7" />
+                                <PasswordBox x:Name="TokenInput" KeyboardNavigation.TabIndex="1"
+                                             AutomationProperties.LabeledBy="{Binding ElementName=TokenLabel}" />
+                                <CheckBox x:Name="RememberToken" Content="Remember this token on this PC" Margin="0,13,0,0" KeyboardNavigation.TabIndex="2" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel x:Name="VerificationFields" Visibility="Collapsed">
+                            <Label x:Name="CodeLabel" Content="Verification code" Target="{Binding ElementName=CodeBox}" />
+                            <TextBox x:Name="CodeBox" MaxLength="12" KeyboardNavigation.TabIndex="0"
+                                     AutomationProperties.LabeledBy="{Binding ElementName=CodeLabel}" />
+                        </StackPanel>
+
+                        <Button x:Name="ConnectButton" Content="Connect" IsDefault="True" KeyboardNavigation.TabIndex="4"
+                                MinHeight="42" Style="{StaticResource PrimaryButton}" Margin="0,20,0,0" Click="Connect" />
+                        <Button x:Name="BackButton" Visibility="Collapsed" Content="Back to sign-in" HorizontalAlignment="Center"
+                                Style="{StaticResource QuietButton}" Margin="0,7,0,0" KeyboardNavigation.TabIndex="5" Click="BackToSignIn" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="ConnectedPanel" Visibility="Collapsed">
+                        <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource DividerBrush}"
+                                BorderThickness="1" CornerRadius="8" Padding="14,12">
+                            <DockPanel>
+                                <Ellipse Width="7" Height="7" Fill="#71C79D" Margin="0,0,12,0" VerticalAlignment="Center" />
+                                <StackPanel>
+                                    <TextBlock x:Name="AccountName" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="ServerName" Foreground="{StaticResource MutedBrush}" FontSize="12"
+                                               Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <WrapPanel HorizontalAlignment="Right" Margin="0,20,0,0">
+                            <Button x:Name="DisconnectButton" Content="Disconnect" Margin="0,0,8,0"
+                                    Style="{StaticResource QuietButton}" Click="Disconnect" />
+                            <Button Content="Open File Explorer" Style="{StaticResource PrimaryButton}" Click="Browse" />
+                        </WrapPanel>
+                    </StackPanel>
+
+                    <TextBlock x:Name="StatusText" Visibility="Collapsed" TextWrapping="Wrap" Margin="0,14,0,0"
+                               Foreground="{StaticResource ErrorBrush}" AutomationProperties.LiveSetting="Polite" />
+                    <Button x:Name="DriverHelp" Visibility="Collapsed" Content="Download FilePoint Setup"
+                            Style="{StaticResource QuietButton}" HorizontalAlignment="Left" Padding="0,8" Click="OpenSetup" />
+                </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

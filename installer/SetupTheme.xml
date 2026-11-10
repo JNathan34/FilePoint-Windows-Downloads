@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Theme xmlns="http://wixtoolset.org/schemas/v4/thmutil">
+    <Font Id="0" Height="-12" Weight="400" Foreground="windowtext" Background="F0F0F0">Segoe UI</Font>
+    <Font Id="1" Height="-13" Weight="700" Foreground="202020" Background="FFFFFF">Segoe UI</Font>
+    <Font Id="2" Height="-12" Weight="400" Foreground="202020" Background="FFFFFF">Segoe UI</Font>
+    <Font Id="3" Height="-11" Weight="400" Foreground="606060" Background="F0F0F0">Segoe UI</Font>
+
+    <Window Width="500" Height="360" HexStyle="100a0000" FontId="0" Caption="FilePoint Setup" IconFile="setup.ico">
+        <ImageControl X="451" Y="10" Width="34" Height="34" ImageFile="logo.png" Visible="yes" />
+        <Static X="0" Y="57" Width="500" Height="2" Visible="yes" />
+        <Label X="9" Y="-41" Width="153" Height="12" FontId="3" DisablePrefix="yes" Visible="yes">FilePoint Setup [WixBundleVersion]</Label>
+        <Static X="164" Y="-46" Width="326" Height="2" Visible="yes" />
+
+        <Page Name="Loading">
+            <ImageControl X="0" Y="0" Width="500" Height="57" ImageFile="header.png" />
+            <Label X="16" Y="7" Width="412" Height="17" FontId="1" DisablePrefix="yes">Preparing Setup</Label>
+            <Label X="22" Y="26" Width="412" Height="18" FontId="2" DisablePrefix="yes">Checking this PC before installation.</Label>
+        </Page>
+
+        <Page Name="Install">
+            <ImageControl X="0" Y="0" Width="500" Height="57" ImageFile="header.png" />
+            <Label X="16" Y="7" Width="412" Height="17" FontId="1" DisablePrefix="yes">Ready to install FilePoint</Label>
+            <Label X="22" Y="26" Width="412" Height="18" FontId="2" DisablePrefix="yes">Add FilePoint to Windows File Explorer.</Label>
+            <Label X="23" Y="78" Width="454" Height="43" FontId="0" DisablePrefix="yes">Select Install to set up FilePoint for your Windows account. Setup will download the required Windows driver if it is missing.</Label>
+            <Button Name="InstallButton" X="-98" Y="-11" Width="80" Height="23" FontId="0" HexStyle="01" TabStop="yes">&amp;Install</Button>
+            <Button Name="InstallCancelButton" X="-12" Y="-11" Width="80" Height="23" FontId="0" TabStop="yes">
+                <Text>&amp;Cancel</Text>
+                <CloseWindowAction />
+            </Button>
+        </Page>
+
+        <Page Name="Progress">
+            <ImageControl X="0" Y="0" Width="500" Height="57" ImageFile="header.png" />
+            <Label X="16" Y="7" Width="412" Height="17" FontId="1" DisablePrefix="yes">
+                <Text>Installing FilePoint</Text>
+                <Text Condition="WixBundleAction = 3 OR WixBundleAction = 4">Removing FilePoint</Text>
+                <Text Condition="WixBundleAction = 8">Repairing FilePoint</Text>
+                <Text Condition="WixBundleAction = 2">Preparing setup files</Text>
+            </Label>
+            <Label X="22" Y="26" Width="412" Height="18" FontId="2" DisablePrefix="yes">Please wait while Setup finishes.</Label>
+            <Label Name="OverallProgressPackageText" X="23" Y="74" Width="400" Height="16" FontId="0" DisablePrefix="yes">Preparing installation…</Label>
+            <Label Name="OverallProgressText" X="434" Y="74" Width="43" Height="16" FontId="0" HexStyle="02" />
+            <Progressbar Name="OverallCalculatedProgressbar" X="23" Y="92" Width="454" Height="17" />
+            <Button Name="ProgressCancelButton" X="-12" Y="-11" Width="80" Height="23" FontId="0" TabStop="yes">&amp;Cancel</Button>
+        </Page>
+
+        <Page Name="Success">
+            <ImageControl X="0" Y="0" Width="500" Height="57" ImageFile="header.png" />
+            <Label X="16" Y="7" Width="412" Height="17" FontId="1" DisablePrefix="yes">
+                <Text>Setup complete</Text>
+                <Text Condition="WixBundleAction = 6">Installation complete</Text>
+                <Text Condition="WixBundleAction = 3 OR WixBundleAction = 4">Uninstall complete</Text>
+                <Text Condition="WixBundleAction = 8">Repair complete</Text>
+            </Label>
+            <Label X="22" Y="26" Width="412" Height="18" FontId="2" DisablePrefix="yes">Setup completed successfully.</Label>
+            <Label X="23" Y="74" Width="454" Height="16" FontId="0" DisablePrefix="yes">Completed</Label>
+            <ImageControl X="23" Y="92" Width="454" Height="17" ImageFile="complete.png" />
+            <Label X="23" Y="153" Width="454" Height="42" FontId="0" DisablePrefix="yes" VisibleCondition="WixStdBARestartRequired">#(loc.SuccessRestartText)</Label>
+            <Button Name="SuccessCloseButton" X="-12" Y="-11" Width="80" Height="23" FontId="0" HexStyle="01" TabStop="yes">
+                <Text>&amp;Finish</Text>
+                <CloseWindowAction />
+            </Button>
+            <Button Name="LaunchButton" X="-98" Y="-11" Width="104" Height="23" FontId="0" TabStop="yes" HideWhenDisabled="yes">&amp;Open FilePoint</Button>
+            <Button Name="SuccessRestartButton" X="-98" Y="-11" Width="104" Height="23" FontId="0" TabStop="yes" HideWhenDisabled="yes">&amp;Restart</Button>
+            <Hypertext X="23" Y="120" Width="454" Height="20" FontId="0" TabStop="yes" VisibleCondition="WixBundleLog">&lt;a href=&quot;[WixBundleLog]&quot;&gt;Show details&lt;/a&gt;</Hypertext>
+        </Page>
+
+        <Page Name="Modify">
+            <ImageControl X="0" Y="0" Width="500" Height="57" ImageFile="header.png" />
+            <Label X="16" Y="7" Width="412" Height="17" FontId="1" DisablePrefix="yes">Manage FilePoint</Label>
+            <Label X="22" Y="26" Width="412" Height="18" FontId="2" DisablePrefix="yes">Repair or remove this installation.</Label>
+            <Label X="23" Y="78" Width="454" Height="46" FontId="0" DisablePrefix="yes">Select Repair to restore the installed files or Uninstall to remove FilePoint from this PC.</Label>
+            <Button Name="RepairButton" X="-184" Y="-11" Width="80" Height="23" FontId="0" TabStop="yes" HideWhenDisabled="yes">&amp;Repair</Button>
+            <Button Name="UninstallButton" X="-98" Y="-11" Width="80" Height="23" FontId="0" TabStop="yes">&amp;Uninstall</Button>
+            <Button Name="ModifyCancelButton" X="-12" Y="-11" Width="80" Height="23" FontId="0" TabStop="yes">
+                <Text>&amp;Close</Text>
+                <CloseWindowAction />
+            </Button>
+        </Page>
+
+        <Page Name="Failure">
+            <ImageControl X="0" Y="0" Width="500" Height="57" ImageFile="header.png" />
+            <Label X="16" Y="7" Width="412" Height="17" FontId="1" DisablePrefix="yes">Setup couldn’t finish</Label>
+            <Label X="22" Y="26" Width="412" Height="18" FontId="2" DisablePrefix="yes">Review the details before trying again.</Label>
+            <Hypertext Name="FailureMessageText" X="23" Y="78" Width="454" Height="55" FontId="0" TabStop="yes" HideWhenDisabled="yes" />
+            <Hypertext Name="FailureLogFileLink" X="23" Y="138" Width="454" Height="20" FontId="0" TabStop="yes" HideWhenDisabled="yes">&lt;a href=&quot;#&quot;&gt;Show details&lt;/a&gt;</Hypertext>
+            <Label X="23" Y="170" Width="454" Height="42" FontId="0" DisablePrefix="yes" VisibleCondition="WixStdBARestartRequired">#(loc.FailureRestartText)</Label>
+            <Button Name="FailureRestartButton" X="-98" Y="-11" Width="80" Height="23" FontId="0" TabStop="yes" HideWhenDisabled="yes">&amp;Restart</Button>
+            <Button Name="FailureCloseButton" X="-12" Y="-11" Width="80" Height="23" FontId="0" HexStyle="01" TabStop="yes">
+                <Text>&amp;Close</Text>
+                <CloseWindowAction />
+            </Button>
+        </Page>
+
+        <Page Name="Help">
+            <ImageControl X="0" Y="0" Width="500" Height="57" ImageFile="header.png" />
+            <Label X="16" Y="7" Width="412" Height="17" FontId="1" DisablePrefix="yes">Setup help</Label>
+            <Label X="22" Y="26" Width="412" Height="18" FontId="2" DisablePrefix="yes">Command-line options for FilePoint Setup.</Label>
+            <Label X="23" Y="78" Width="454" Height="156" FontId="0" DisablePrefix="yes">#(loc.HelpText)</Label>
+            <Button Name="HelpCloseButton" X="-12" Y="-11" Width="80" Height="23" FontId="0" HexStyle="01" TabStop="yes">
+                <Text>&amp;Close</Text>
+                <CloseWindowAction />
+            </Button>
+        </Page>
+    </Window>
+</Theme>
