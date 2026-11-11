@@ -7,9 +7,9 @@ namespace FilePoint.Windows;
 
 internal sealed class TrayMenu : ContextMenuStrip
 {
-    private const int RowWidth = 322;
-    private const int RowHeight = 36;
-    private const int HeaderHeight = 69;
+    private const int RowWidth = 236;
+    private const int RowHeight = 30;
+    private const int HeaderHeight = 51;
     private readonly ToolStripLabel heading = new() { AutoSize = false, Size = new(RowWidth, HeaderHeight) };
     private readonly ToolStripMenuItem browse;
     private readonly ToolStripMenuItem recycleBin;
@@ -25,7 +25,7 @@ internal sealed class TrayMenu : ContextMenuStrip
         Renderer = themedRenderer;
         ShowImageMargin = false;
         ShowCheckMargin = false;
-        Padding = new Padding(0, 4, 0, 7);
+        Padding = new Padding(0, 3, 0, 5);
         Items.Add(heading);
         Items.Add(new MenuDivider());
         AddAction("Open FilePoint", MenuIcon.Open, open);
@@ -52,7 +52,7 @@ internal sealed class TrayMenu : ContextMenuStrip
         recovery.Visible = hasRecoveryFolder;
         Renderer = SystemInformation.HighContrast ? contrastRenderer : themedRenderer;
         heading.Size = new Size(LogicalToDeviceUnits(RowWidth), LogicalToDeviceUnits(HeaderHeight));
-        Padding = new Padding(0, LogicalToDeviceUnits(4), 0, LogicalToDeviceUnits(7));
+        Padding = new Padding(0, LogicalToDeviceUnits(3), 0, LogicalToDeviceUnits(5));
         ApplyShape();
     }
 
@@ -88,7 +88,7 @@ internal sealed class TrayMenu : ContextMenuStrip
     private static GraphicsPath MenuShape(ToolStrip menu)
     {
         var shape = new GraphicsPath();
-        int corner = menu.LogicalToDeviceUnits(24);
+        int corner = menu.LogicalToDeviceUnits(18);
         shape.AddRoundedRectangle(new Rectangle(0, 0, menu.Width - 1, menu.Height - 1), new Size(corner, corner));
         return shape;
     }
@@ -100,7 +100,7 @@ internal sealed class TrayMenu : ContextMenuStrip
         public override Size GetPreferredSize(Size constrainingSize)
         {
             Size preferred = base.GetPreferredSize(constrainingSize);
-            return new Size(preferred.Width, Owner?.LogicalToDeviceUnits(11) ?? 11);
+            return new Size(preferred.Width, Owner?.LogicalToDeviceUnits(7) ?? 7);
         }
     }
 
@@ -135,10 +135,10 @@ internal sealed class TrayMenu : ContextMenuStrip
         private static readonly Color QuitTile = Color.FromArgb(106, 45, 48);
         private const TextFormatFlags TextFlags = TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
             TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis;
-        private readonly Font titleFont = new("Segoe UI", 13.5f, FontStyle.Bold);
-        private readonly Font bodyFont = new("Segoe UI", 11f);
-        private readonly Font statusFont = new("Segoe UI", 9f);
-        private readonly Font iconFont = new("Segoe MDL2 Assets", 12f);
+        private readonly Font titleFont = new("Segoe UI", 11.5f, FontStyle.Bold);
+        private readonly Font bodyFont = new("Segoe UI", 10f);
+        private readonly Font statusFont = new("Segoe UI", 8.5f);
+        private readonly Font iconFont = new("Segoe MDL2 Assets", 10f);
 
         internal string Status { get; set; } = "";
         internal bool Connected { get; set; }
@@ -159,7 +159,7 @@ internal sealed class TrayMenu : ContextMenuStrip
         {
             using var pen = new Pen(Outline);
             int y = e.Item.Height / 2;
-            int inset = e.ToolStrip?.LogicalToDeviceUnits(19) ?? 19;
+            int inset = e.ToolStrip?.LogicalToDeviceUnits(12) ?? 12;
             e.Graphics.DrawLine(pen, inset, y, e.Item.Width - inset, y);
         }
 
@@ -167,7 +167,7 @@ internal sealed class TrayMenu : ContextMenuStrip
         {
             if (!e.Item.Enabled || !e.Item.Selected)
                 return;
-            int inset = e.ToolStrip?.LogicalToDeviceUnits(11) ?? 11;
+            int inset = e.ToolStrip?.LogicalToDeviceUnits(7) ?? 7;
             int corner = e.ToolStrip?.LogicalToDeviceUnits(6) ?? 6;
             var bounds = new Rectangle(inset, 1, e.Item.Width - inset * 2, e.Item.Height - 2);
             DrawTile(e.Graphics, bounds, corner, Selection);
@@ -179,13 +179,13 @@ internal sealed class TrayMenu : ContextMenuStrip
 
             if (e.Item is ToolStripLabel)
             {
-                DrawTile(e.Graphics, new Rectangle(Px(17), Px(8), Px(47), Px(46)), Px(12), Selection);
-                e.Graphics.DrawImage(logo, new Rectangle(Px(23), Px(14), Px(35), Px(34)));
-                TextRenderer.DrawText(e.Graphics, "FilePoint", titleFont, new Rectangle(Px(75), Px(8), e.Item.Width - Px(91), Px(24)),
+                DrawTile(e.Graphics, new Rectangle(Px(12), Px(7), Px(34), Px(34)), Px(10), Selection);
+                e.Graphics.DrawImage(logo, new Rectangle(Px(16), Px(11), Px(26), Px(26)));
+                TextRenderer.DrawText(e.Graphics, "FilePoint", titleFont, new Rectangle(Px(55), Px(5), e.Item.Width - Px(67), Px(21)),
                     TextColor, TextFlags);
                 var statusColor = Connected ? Green : Muted;
-                DrawTile(e.Graphics, new Rectangle(Px(76), Px(38), Px(8), Px(8)), Px(8), statusColor);
-                TextRenderer.DrawText(e.Graphics, Status, statusFont, new Rectangle(Px(92), Px(32), e.Item.Width - Px(108), Px(21)),
+                DrawTile(e.Graphics, new Rectangle(Px(56), Px(31), Px(6), Px(6)), Px(6), statusColor);
+                TextRenderer.DrawText(e.Graphics, Status, statusFont, new Rectangle(Px(68), Px(25), e.Item.Width - Px(80), Px(18)),
                     statusColor, TextFlags);
                 return;
             }
@@ -195,13 +195,13 @@ internal sealed class TrayMenu : ContextMenuStrip
             {
                 int center = e.Item.Height / 2;
                 if (action.IconKind == MenuIcon.Power)
-                    DrawTile(e.Graphics, new Rectangle(Px(21), center - Px(13), Px(33), Px(26)), Px(6),
+                    DrawTile(e.Graphics, new Rectangle(Px(13), center - Px(11), Px(26), Px(22)), Px(6),
                         action.Enabled ? QuitTile : Selection);
-                DrawIcon(e.Graphics, action.IconKind, Px(29), center - Px(9), Px(18), color);
+                DrawIcon(e.Graphics, action.IconKind, Px(18), center - Px(8), Px(16), color);
                 if (action.IconKind != MenuIcon.Power)
-                    DrawChevron(e.Graphics, e.Item.Width - Px(29), center, Px(4), color);
+                    DrawChevron(e.Graphics, e.Item.Width - Px(21), center, Px(4), color);
             }
-            TextRenderer.DrawText(e.Graphics, e.Text, bodyFont, new Rectangle(Px(70), 0, e.Item.Width - Px(110), e.Item.Height),
+            TextRenderer.DrawText(e.Graphics, e.Text, bodyFont, new Rectangle(Px(48), 0, e.Item.Width - Px(78), e.Item.Height),
                 color, TextFlags);
         }
 

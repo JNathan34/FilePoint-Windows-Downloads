@@ -45,7 +45,7 @@ internal partial class MainWindow : Window
         UiTheme.StyleCaption(this);
 
         tray = new Forms.NotifyIcon { Icon = appIcon, Text = "FilePoint for Windows" };
-        trayMenu = new TrayMenu(appIcon, ShowWindow, OpenDrive, ShowRecycleBin, ShowUpdates, () => { exitRequested = true; Close(); },
+        trayMenu = new TrayMenu(appIcon, ShowWindow, OpenDrive, ShowRecycleBin, QueueUpdates, () => { exitRequested = true; Close(); },
             () => OpenExternal(WritableFile.RecoveryPath));
         trayMenu.Opening += (_, _) => trayMenu.RefreshState(drive?.Path, busy || showingRecycleBin, availableUpdate?.Version,
             Directory.Exists(WritableFile.RecoveryPath), drive?.HasRecycleBin == true);
@@ -56,7 +56,7 @@ internal partial class MainWindow : Window
             if (recoveryPending)
                 OpenExternal(WritableFile.RecoveryPath);
             else
-                ShowUpdates();
+                QueueUpdates();
         });
         tray.Visible = true;
 
@@ -121,7 +121,7 @@ internal partial class MainWindow : Window
     {
         var menu = new ContextMenu { PlacementTarget = MoreButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
             VerticalOffset = 4 };
-        AddOption(availableUpdate is null ? "Updates…" : $"Update {availableUpdate.Version} available", ShowUpdates);
+        AddOption(availableUpdate is null ? "Updates…" : $"Update {availableUpdate.Version} available", QueueUpdates);
         if (drive?.HasRecycleBin == true)
             AddOption("Recycle Bin", ShowRecycleBin);
         var startup = new MenuItem
@@ -515,9 +515,15 @@ internal partial class MainWindow : Window
         MoreButton.ToolTip = update is null ? "Options" : $"Update {update.Version} available";
     }
 
+    private void QueueUpdates()
+    {
+        // Let the tray or Options menu release its input before entering the WPF modal loop.
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(ShowUpdates));
+    }
+
     private void ShowUpdates()
     {
-        if (busy || showingUpdates || showingRecycleBin)
+        if (exitRequested || busy || showingUpdates || showingRecycleBin)
             return;
         ShowWindow();
         var window = new UpdateWindow(this, availableUpdate, SetUpdate);
