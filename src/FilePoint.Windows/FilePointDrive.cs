@@ -53,8 +53,10 @@ internal sealed class FilePointDrive : IDokanOperations
     {
         internal Node Node { get; set; } = node;
         internal WritableFile? Writable { get; } = writable;
+        internal bool WriterReserved { get; set; } = writable is not null;
         internal bool DeletePending { get; set; }
         internal bool FailedWrite { get; set; }
+        internal bool FailedCleanupSave { get; set; }
         internal byte[]? Block { get; set; }
         internal long Offset { get; set; }
     }
@@ -192,7 +194,7 @@ internal sealed class FilePointDrive : IDokanOperations
             if (open.DeletePending && open.Writable?.IsNew != true && CanRecycle(open.Node))
             {
                 var node = open.Node;
-                bool reserved = open.Writable is not null || writers.TryAdd(node.WindowsPath, 0);
+                bool reserved = open.WriterReserved || writers.TryAdd(node.WindowsPath, 0);
                 try
                 {
                     if (!reserved)
@@ -211,7 +213,7 @@ internal sealed class FilePointDrive : IDokanOperations
                 }
                 finally
                 {
-                    if (reserved && open.Writable is null)
+                    if (reserved && !open.WriterReserved)
                         writers.TryRemove(node.WindowsPath, out _);
                 }
             }
@@ -219,6 +221,13 @@ internal sealed class FilePointDrive : IDokanOperations
             {
                 open.Writable.Discard();
             }
+            if (open.Writable is { } local && !open.DeletePending && !open.FailedWrite)
+            {
+                // Windows can start its next move/delete step before CloseFile runs.
+                try { Save(open, local, info); }
+                catch (Exception) { open.FailedCleanupSave = true; }
+            }
+            ReleaseWriter(open);
             if (open.Writable is null)
                 info.Context = null;
         }
@@ -233,16 +242,32 @@ internal sealed class FilePointDrive : IDokanOperations
         {
             lock (open)
             {
-                using (local)
+                try
                 {
-                    if (!open.DeletePending && !info.DeletePending && !open.FailedWrite)
-                        Save(open, local, info);
+                    using (local)
+                    {
+                        if (!open.DeletePending && !info.DeletePending && !open.FailedWrite && !open.FailedCleanupSave)
+                            Save(open, local, info);
+                    }
+                    if (open.FailedCleanupSave)
+                        uploadFailed?.Invoke(local.LocalPath);
                 }
+                finally { ReleaseWriter(open); }
             }
         }
         catch (Exception) { uploadFailed?.Invoke(local.LocalPath); }
-        finally { writers.TryRemove(open.Node.WindowsPath, out _); }
     }
+
+    private void ReleaseWriter(OpenFile open)
+    {
+        if (!open.WriterReserved)
+            return;
+        writers.TryRemove(open.Node.WindowsPath, out _);
+        open.WriterReserved = false;
+    }
+
+    private bool ReserveWriter(OpenFile open) =>
+        open.WriterReserved || (open.WriterReserved = writers.TryAdd(open.Node.WindowsPath, 0));
 
     public NtStatus GetFileInformation(string name, out FileInformation information, IDokanFileInfo info)
     {
@@ -393,9 +418,11 @@ internal sealed class FilePointDrive : IDokanOperations
         {
             lock (open)
             {
-                local.Data.Position = info.WriteToEndOfFile ? local.Data.Length : offset;
-                local.MarkChanged();
-                local.Data.Write(buffer);
+                // Dokan can deliver paging writes after Cleanup for memory-mapped files.
+                if (!ReserveWriter(open))
+                    return DokanResult.SharingViolation;
+                local.Write(buffer, info.WriteToEndOfFile ? local.Data.Length : offset,
+                    () => info.TryResetTimeout(60_000));
                 written = buffer.Length;
             }
             return DokanResult.Success;
@@ -469,7 +496,7 @@ internal sealed class FilePointDrive : IDokanOperations
                 string targetPath = destination?.Path ?? parent.Path.TrimEnd('/') + "/" + leaf;
                 if (targetPath == node.Path)
                     return DokanResult.Success;
-                bool reserveSource = open.Writable is null;
+                bool reserveSource = !open.WriterReserved;
                 if (reserveSource && !writers.TryAdd(node.WindowsPath, 0))
                     return DokanResult.SharingViolation;
                 if (!sameName && !writers.TryAdd(targetWindowsPath, 0))
@@ -516,8 +543,9 @@ internal sealed class FilePointDrive : IDokanOperations
             {
                 if (!allocation || length < local.Data.Length)
                 {
-                    local.MarkChanged();
-                    local.Data.SetLength(length);
+                    if (!ReserveWriter(open))
+                        return DokanResult.SharingViolation;
+                    local.Resize(length);
                 }
             }
             return DokanResult.Success;

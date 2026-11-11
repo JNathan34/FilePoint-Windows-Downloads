@@ -51,6 +51,23 @@ internal static class WriteTests
             Await(() => fixture.Files.TryGetValue("/copied.bin", out var bytes) && bytes.SequenceEqual(copy),
                 "Copy a file spanning multiple upload chunks");
 
+            string staged = Path.Combine(root, "staged.bin");
+            using (var output = new FileStream(staged, FileMode.CreateNew, FileAccess.Write, FileShare.None, 0, FileOptions.WriteThrough))
+            {
+                output.SetLength(copy.Length + 1024);
+                output.Write(copy);
+                Require(fixture.StagedLength("/staged.bin") == 4 * 1024 * 1024 &&
+                    !fixture.Files.ContainsKey("/staged.bin"), "Send completed chunks while the destination is still open");
+                output.Position = 0;
+                output.WriteByte(42);
+                output.SetLength(copy.Length);
+            }
+            string movedStaged = Path.Combine(root, "moved-staged.bin");
+            File.Move(staged, movedStaged);
+            Require(fixture.Files["/moved-staged.bin"][0] == 42 &&
+                fixture.Files["/moved-staged.bin"].AsSpan(1).SequenceEqual(copy.AsSpan(1)),
+                "Move immediately after closing and preserve rewrites and truncation");
+
             using (var edit = File.Open(Path.Combine(root, "existing.txt"), FileMode.Open, FileAccess.ReadWrite))
             {
                 Require(edit.ReadByte() == 'a', "An edit starts with the original file contents");
@@ -167,6 +184,8 @@ internal static class WriteTests
         internal ConcurrentDictionary<string, byte[]> Recycled { get; } = new();
         internal bool RecycleAvailable { get; set; } = true;
         internal bool RejectRecycle { get; set; }
+        internal long StagedLength(string path) =>
+            staging.Values.Single(item => item.Path == path).Data.Length;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(Send(request, cancellationToken));

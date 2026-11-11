@@ -15,6 +15,10 @@ internal sealed class WritableFile : IDisposable
     private NativeUpload? upload;
     private string? revision;
     private bool dirty;
+    private long writtenPrefix;
+    private long uploadedLength;
+    private byte[]? chunk;
+    private bool deferUpload;
 
     internal string LocalPath { get; }
     internal FileStream Data { get; }
@@ -46,7 +50,8 @@ internal sealed class WritableFile : IDisposable
                 }
             }
             dirty = !exists || truncate;
-            TryCancel();
+            if (exists && !truncate)
+                TryCancel();
         }
         catch
         {
@@ -57,39 +62,99 @@ internal sealed class WritableFile : IDisposable
         }
     }
 
-    internal void MarkChanged() => dirty = true;
+    internal void Write(byte[] data, long offset, Action keepAlive)
+    {
+        dirty = true;
+        Data.Position = offset;
+        Data.Write(data);
+        if (offset < uploadedLength)
+        {
+            // The server accepts sequential chunks. Replay from disk if an app rewrites one.
+            TryCancel();
+            deferUpload = true;
+        }
+        if (offset <= writtenPrefix)
+            writtenPrefix = Math.Max(writtenPrefix, offset + data.Length);
+        if (deferUpload || writtenPrefix - uploadedLength < ChunkSize)
+            return;
+        try
+        {
+            UploadThrough(writtenPrefix - writtenPrefix % ChunkSize, keepAlive);
+        }
+        catch (Exception error) when (IsTransferError(error))
+        {
+            // Finish staging locally. Save retries against the original revision.
+            TryCancel();
+            deferUpload = true;
+        }
+    }
+
+    internal void Resize(long length)
+    {
+        dirty = true;
+        Data.SetLength(length);
+        writtenPrefix = Math.Min(writtenPrefix, length);
+        if (length < uploadedLength)
+        {
+            TryCancel();
+            deferUpload = true;
+        }
+    }
 
     internal void Save(Action keepAlive)
     {
         if (!dirty)
             return;
         Data.Flush(flushToDisk: true);
-        upload ??= api.BeginWrite(source, path, revision is not null, revision);
         try
         {
-            byte[] buffer = new byte[ChunkSize];
-            Data.Position = 0;
-            while (Data.Position < Data.Length)
+            if (upload is not null)
             {
-                keepAlive();
-                long offset = Data.Position;
-                int count = (int)Math.Min(buffer.Length, Data.Length - offset);
-                Data.ReadExactly(buffer.AsSpan(0, count));
-                api.WriteChunk(upload.Upload, offset, buffer, count);
+                try { Commit(keepAlive); }
+                catch (HttpRequestException error) when (error.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    // A handle can sit idle long enough for the server to expire its staging session.
+                    TryCancel();
+                    Commit(keepAlive);
+                }
             }
-            keepAlive();
-            var committed = api.CommitWrite(upload.Upload, Data.Length);
-            upload = null;
-            if (committed.Length != Data.Length || string.IsNullOrEmpty(committed.Revision))
-                throw new IOException("FilePoint could not confirm the uploaded file.");
-            revision = committed.Revision;
-            dirty = false;
+            else
+                Commit(keepAlive);
         }
         catch
         {
             TryCancel();
             throw;
         }
+    }
+
+    private void UploadThrough(long length, Action keepAlive)
+    {
+        upload ??= api.BeginWrite(source, path, revision is not null, revision);
+        while (uploadedLength < length)
+        {
+            keepAlive();
+            chunk ??= new byte[ChunkSize];
+            int count = (int)Math.Min(chunk.Length, length - uploadedLength);
+            Data.Position = uploadedLength;
+            Data.ReadExactly(chunk.AsSpan(0, count));
+            api.WriteChunk(upload.Upload, uploadedLength, chunk, count);
+            uploadedLength += count;
+        }
+    }
+
+    private void Commit(Action keepAlive)
+    {
+        UploadThrough(Data.Length, keepAlive);
+        keepAlive();
+        var committed = api.CommitWrite(upload!.Upload, Data.Length);
+        upload = null;
+        uploadedLength = 0;
+        if (committed.Length != Data.Length || string.IsNullOrEmpty(committed.Revision))
+            throw new IOException("FilePoint could not confirm the uploaded file.");
+        revision = committed.Revision;
+        deferUpload = false;
+        dirty = false;
     }
 
     internal void Discard() => dirty = false;
@@ -111,15 +176,19 @@ internal sealed class WritableFile : IDisposable
 
     private void TryCancel()
     {
+        uploadedLength = 0;
         if (upload is not { } pending)
             return;
         upload = null;
         try { api.CancelWrite(pending.Upload); }
-        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or OperationCanceledException)
+        catch (Exception error) when (IsTransferError(error))
         {
             // The server expires incomplete staging sessions.
         }
     }
+
+    private static bool IsTransferError(Exception error) =>
+        error is HttpRequestException or IOException or JsonException or OperationCanceledException;
 
     private void RemoveLocalCopy()
     {
