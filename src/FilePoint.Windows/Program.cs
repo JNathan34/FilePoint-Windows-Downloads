@@ -30,10 +30,23 @@ internal static class Program
     }
 }
 
-internal sealed class MountedDrive(DriveMount host, FilePointApi api, string username) : IDisposable
+internal sealed class MountedDrive(DriveMount host, FilePointApi api, Account account, FilePointDrive fileSystem,
+    bool hasRecycleBin) : IDisposable
 {
-    internal string Username { get; } = username;
+    internal string Username => account.Username;
     internal string Path => host.Path;
+    internal bool HasRecycleBin { get; } = hasRecycleBin;
+    internal bool CanRestore => account.CanRestore;
+    internal bool CanDelete => account.CanDelete;
+
+    internal RecycledItem[] ListRecycledItems() => api.ListRecycledItems();
+
+    internal void ChangeRecycledItem(string id, bool restore)
+    {
+        api.ChangeRecycledItem(id, restore);
+        if (restore)
+            fileSystem.RefreshListings();
+    }
 
     internal static MountedDrive Connect(Uri server, bool apiTokenMode, string name, string secret, string code,
         Action<string> uploadFailed, Action<string> recycleFailed)
@@ -51,11 +64,12 @@ internal sealed class MountedDrive(DriveMount host, FilePointApi api, string use
                 throw new UnauthorizedAccessException("This FilePoint account has no storage sources.");
             using var identity = WindowsIdentity.GetCurrent();
             var sources = api.GetWritableSources();
+            bool hasRecycleBin = api.SupportsRecycleBin();
             var fileSystem = new FilePointDrive(api, new FolderIcons(), identity.User!, sources, uploadFailed,
-                sources.Length > 0 && api.CanRecycle(account), recycleFailed);
+                hasRecycleBin && account.CanDelete, recycleFailed, hasRecycleBin);
             host = new DriveMount(fileSystem);
             ExplorerIntegration.Register(host.Path);
-            return new MountedDrive(host, api, account.Username);
+            return new MountedDrive(host, api, account, fileSystem, hasRecycleBin);
         }
         catch
         {

@@ -27,6 +27,7 @@ internal partial class MainWindow : Window
     private Version? notifiedVersion;
     private bool checkingUpdate;
     private bool showingUpdates;
+    private bool showingRecycleBin;
     private MountedDrive? drive;
     private SavedConnection? saved;
     private SignInMode signInMode;
@@ -44,10 +45,10 @@ internal partial class MainWindow : Window
         UiTheme.StyleCaption(this);
 
         tray = new Forms.NotifyIcon { Icon = appIcon, Text = "FilePoint for Windows" };
-        trayMenu = new TrayMenu(appIcon, ShowWindow, OpenDrive, ShowUpdates, () => { exitRequested = true; Close(); },
+        trayMenu = new TrayMenu(appIcon, ShowWindow, OpenDrive, ShowRecycleBin, ShowUpdates, () => { exitRequested = true; Close(); },
             () => OpenExternal(WritableFile.RecoveryPath));
-        trayMenu.Opening += (_, _) => trayMenu.RefreshState(drive?.Path, busy, availableUpdate?.Version,
-            Directory.Exists(WritableFile.RecoveryPath));
+        trayMenu.Opening += (_, _) => trayMenu.RefreshState(drive?.Path, busy || showingRecycleBin, availableUpdate?.Version,
+            Directory.Exists(WritableFile.RecoveryPath), drive?.HasRecycleBin == true);
         tray.ContextMenuStrip = trayMenu;
         tray.DoubleClick += (_, _) => Dispatcher.Invoke(ShowWindow);
         tray.BalloonTipClicked += (_, _) => Dispatcher.Invoke(() =>
@@ -100,6 +101,8 @@ internal partial class MainWindow : Window
         var menu = new ContextMenu { PlacementTarget = MoreButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
             VerticalOffset = 4 };
         AddOption(availableUpdate is null ? "Updates…" : $"Update {availableUpdate.Version} available", ShowUpdates);
+        if (drive?.HasRecycleBin == true)
+            AddOption("Recycle Bin", ShowRecycleBin);
         if (drive is null && signInMode == SignInMode.Password)
             AddOption("Sign in with an API token", ShowTokenSignIn);
         if (drive is null && saved is not null)
@@ -386,6 +389,16 @@ internal partial class MainWindow : Window
         catch (Exception) { ShowStatus("Windows couldn’t open that location."); }
     }
 
+    private void ShowRecycleBin()
+    {
+        if (busy || showingUpdates || showingRecycleBin || drive is not { HasRecycleBin: true } connected)
+            return;
+        ShowWindow();
+        showingRecycleBin = true;
+        try { new RecycleBinWindow(this, connected).ShowDialog(); }
+        finally { showingRecycleBin = false; }
+    }
+
     private void ReportUploadFailure(string path) => Dispatcher.BeginInvoke(() =>
     {
         if (exitRequested)
@@ -443,7 +456,7 @@ internal partial class MainWindow : Window
 
     private void ShowUpdates()
     {
-        if (busy || showingUpdates)
+        if (busy || showingUpdates || showingRecycleBin)
             return;
         ShowWindow();
         var window = new UpdateWindow(this, availableUpdate, SetUpdate);

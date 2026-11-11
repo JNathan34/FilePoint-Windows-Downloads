@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using DokanNet;
 
 namespace FilePoint.Windows;
@@ -16,6 +17,7 @@ internal sealed class FilePointDrive : IDokanOperations
 {
     private const FileAttributes VirtualAttributes = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReadOnly;
     private const string DevicesFolder = "Connected devices";
+    private const string RecycleBinShortcut = "Recycle Bin.url";
     private static readonly StringComparer NameComparer = StringComparer.OrdinalIgnoreCase;
     private readonly FilePointApi api;
     private readonly FolderIcons icons;
@@ -25,6 +27,7 @@ internal sealed class FilePointDrive : IDokanOperations
     private readonly HashSet<string> writableSources;
     private readonly Action<string>? uploadFailed;
     private readonly bool canRecycle;
+    private readonly bool hasRecycleBin;
     private readonly Action<string>? recycleFailed;
     private readonly ConcurrentDictionary<string, byte> writers = new(NameComparer);
     internal bool CanWrite => writableSources.Count > 0;
@@ -35,12 +38,13 @@ internal sealed class FilePointDrive : IDokanOperations
 
     private sealed record Node(string Name, string Source, string Path, string WindowsPath, bool Directory,
         long Length, DateTimeOffset Modified, bool Hidden, IconChoice? Icon, byte[]? Data = null, string IconScope = "",
-        bool IsDeviceGroup = false)
+        bool IsDeviceGroup = false, bool VisibleShortcut = false)
     {
         internal FileAttributes Attributes => Directory
             ? FileAttributes.Directory | (Icon is null ? 0 : FileAttributes.ReadOnly) |
               (Hidden ? FileAttributes.Hidden : 0)
-            : Data is not null ? VirtualAttributes : FileAttributes.ReadOnly | (Hidden ? FileAttributes.Hidden : 0);
+            : Data is not null && !VisibleShortcut ? VirtualAttributes :
+              FileAttributes.ReadOnly | (Hidden ? FileAttributes.Hidden : 0);
     }
 
     private sealed record CachedDirectory(DateTimeOffset Expires, Lazy<Node[]> Children);
@@ -57,7 +61,7 @@ internal sealed class FilePointDrive : IDokanOperations
 
     internal FilePointDrive(FilePointApi api, FolderIcons icons, SecurityIdentifier user,
         IEnumerable<string>? writableSources = null, Action<string>? uploadFailed = null,
-        bool canRecycle = false, Action<string>? recycleFailed = null)
+        bool canRecycle = false, Action<string>? recycleFailed = null, bool hasRecycleBin = false)
     {
         this.api = api;
         this.icons = icons;
@@ -65,6 +69,7 @@ internal sealed class FilePointDrive : IDokanOperations
         this.writableSources = new HashSet<string>(writableSources ?? [], StringComparer.Ordinal);
         this.uploadFailed = uploadFailed;
         this.canRecycle = canRecycle;
+        this.hasRecycleBin = hasRecycleBin;
         this.recycleFailed = recycleFailed;
         sddl = $"O:{user}G:{user}D:P(A;;FA;;;SY)(A;;{(CanWrite ? "FA" : "FRFX")};;;{user})";
     }
@@ -325,7 +330,7 @@ internal sealed class FilePointDrive : IDokanOperations
                 return DokanResult.NotADirectory;
             files = Children(folder)
                 // Explorer opens the icon files by name. Wildcard enumeration feeds folder copy and delete.
-                .Where(node => node.Data is null || NameComparer.Equals(pattern, node.Name))
+                .Where(node => node.Data is null || node.VisibleShortcut || NameComparer.Equals(pattern, node.Name))
                 .Where(node => FileSystemName.MatchesWin32Expression(pattern, node.Name))
                 .Select(Info).ToArray();
             return DokanResult.Success;
@@ -687,8 +692,19 @@ internal sealed class FilePointDrive : IDokanOperations
                 IconScope: homeScope, IsDeviceGroup: true));
         }
 
+        if (hasRecycleBin && !sources.Any(source => NameComparer.Equals(source.Name, RecycleBinShortcut)))
+        {
+            string icon = System.IO.Path.Combine(Environment.SystemDirectory, "imageres.dll");
+            byte[] shortcut = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(
+                $"[InternetShortcut]\r\nURL={api.RecycleBinPage.AbsoluteUri}\r\nIconFile={icon}\r\nIconIndex=-55\r\n")).ToArray();
+            sources.Add(new Node(RecycleBinShortcut, "", "", ChildPath(root, RecycleBinShortcut), false, shortcut.Length,
+                DateTimeOffset.UnixEpoch, false, null, shortcut, VisibleShortcut: true));
+        }
+
         return sources.OrderBy(node => node.Name, NameComparer).ToArray();
     }
+
+    internal void RefreshListings() => directories.Clear();
 
     private Node[] ListDevices(Node folder)
     {

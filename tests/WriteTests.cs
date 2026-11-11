@@ -25,18 +25,25 @@ internal static class WriteTests
         var recovery = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var failedDelete = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var account = api.GetAccount();
-        Require(!api.CanRecycle(account with { Permissions = new AccountPermissions(false) }),
+        Require(!(account with { Permissions = new AccountPermissions(false) }).CanDelete,
             "Do not enable deletion for accounts without permission");
         fixture.RecycleAvailable = false;
-        Require(!api.CanRecycle(account), "Do not enable deletion on a server without the recycle service");
+        Require(!api.SupportsRecycleBin(), "Do not enable deletion on a server without the recycle service");
         fixture.RecycleAvailable = true;
-        Require(api.CanRecycle(account), "Enable deletion on a server with the recycle service");
-        using var mount = new DriveMount(new FilePointDrive(api, new FolderIcons(), identity.User!, api.GetWritableSources(),
-            path => recovery.TrySetResult(path), canRecycle: true, recycleFailed: name => failedDelete.TrySetResult(name)));
+        Require(api.SupportsRecycleBin() && account.CanDelete, "Enable deletion on a server with the recycle service");
+        var fileSystem = new FilePointDrive(api, new FolderIcons(), identity.User!, api.GetWritableSources(),
+            path => recovery.TrySetResult(path), canRecycle: true, recycleFailed: name => failedDelete.TrySetResult(name),
+            hasRecycleBin: true);
+        using var mount = new DriveMount(fileSystem);
         string root = Path.Combine(mount.Path, "Documents");
         string local = Path.GetTempFileName();
         try
         {
+            string shortcut = Path.Combine(mount.Path, "Recycle Bin.url");
+            Require(Directory.EnumerateFiles(mount.Path).Contains(shortcut) &&
+                !File.GetAttributes(shortcut).HasFlag(FileAttributes.Hidden) &&
+                File.ReadAllText(shortcut).Contains("URL=https://filepoint.example/?plexpointRecycleBin=1", StringComparison.Ordinal),
+                "Explorer lists a visible shortcut to the connected server's Recycle Bin");
             byte[] copy = new byte[5 * 1024 * 1024 + 23];
             new Random(7).NextBytes(copy);
             File.WriteAllBytes(local, copy);
@@ -76,6 +83,18 @@ internal static class WriteTests
             Await(() => fixture.Recycled.TryGetValue("/renamed.bin", out var recycled) && recycled.SequenceEqual(copy),
                 "Explorer drive deletes move the original bytes to the server recycle bin");
             Require(!Directory.EnumerateFiles(root).Contains(renamed), "A recycled file disappears from the mounted listing");
+            var item = api.ListRecycledItems().Single();
+            Require(item.Name == "renamed.bin" && item.Path == "/renamed.bin" && item.Source == "Documents",
+                "List the deleted file and its original location");
+            api.ChangeRecycledItem(item.Id, restore: true);
+            fileSystem.RefreshListings();
+            Require(api.ListRecycledItems().Length == 0 && fixture.Files["/renamed.bin"].SequenceEqual(copy),
+                "Restore by recycle-bin ID and preserve the original bytes");
+            File.Delete(renamed);
+            Await(() => fixture.Recycled.ContainsKey("/renamed.bin"), "Recycle the restored file");
+            api.ChangeRecycledItem(api.ListRecycledItems().Single().Id, restore: false);
+            Require(api.ListRecycledItems().Length == 0 && !fixture.Files.ContainsKey("/renamed.bin"),
+                "Permanently delete the selected recycle-bin entry");
             Directory.Delete(Path.Combine(root, "New folder"));
             Await(() => !fixture.Folders.ContainsKey("/New folder"), "Delete an empty directory on the mounted drive");
             string temporary = Path.Combine(root, "temporary.txt");
@@ -158,12 +177,33 @@ internal static class WriteTests
             var query = HttpUtility.ParseQueryString(uri.Query);
             string prefix = query["source"] == "Archive" ? "/@Archive" : "";
             if (uri.AbsolutePath == "/api/users")
-                return Json(new { username = "Test", permissions = new { delete = true },
+                return Json(new { username = "Test", permissions = new { delete = true, modify = true },
                     scopes = new[] { new { name = "Documents", scope = "/" }, new { name = "Archive", scope = "/" } } });
             if (uri.AbsolutePath == "/__foldericons/icons" && query["source"] == "Documents" && query["path"] == "")
                 return Json(new { icons = new { Project = new { material = "folder" } } });
             if (uri.AbsolutePath == "/__foldericons/recycle-bin")
-                return RecycleAvailable ? Json(new { count = 0, items = Array.Empty<object>() }) : new(HttpStatusCode.NotFound);
+            {
+                if (!RecycleAvailable)
+                    return new(HttpStatusCode.NotFound);
+                if (request.Method == HttpMethod.Get)
+                {
+                    var items = Recycled.Keys.Select(path => new
+                    {
+                        id = path, source = "Documents", path, name = Path.GetFileName(path), isDir = false,
+                        deletedAt = DateTimeOffset.UnixEpoch
+                    }).ToArray();
+                    return Json(new { count = items.Length, items });
+                }
+                Require(request.Headers.Authorization?.Scheme == "Bearer", "Recycle Bin mutations use the signed-in session");
+                using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+                string id = body.RootElement.GetProperty("ids")[0].GetString()!;
+                if (!Recycled.TryGetValue(id, out var payload))
+                    return new(HttpStatusCode.NotFound);
+                if (request.Method == HttpMethod.Post && !Files.TryAdd(id, payload))
+                    return new(HttpStatusCode.Conflict);
+                Recycled.TryRemove(id, out _);
+                return Json(new { changed = true });
+            }
             if (uri.AbsolutePath == "/api/resources" && request.Method == HttpMethod.Delete)
             {
                 string path = query["path"]!;

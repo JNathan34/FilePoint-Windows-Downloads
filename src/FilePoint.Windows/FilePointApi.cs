@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 
@@ -21,11 +22,16 @@ internal sealed record DiskSpace(long Total, long Free);
 internal sealed record ConnectedDevice(string? Name, string? Path, string? Source, string? Status, string? IconUrl);
 internal sealed record ConnectedDevices(ConnectedDevice[]? Devices);
 internal sealed record SourceScope(string Name, string? Scope);
-internal sealed record Account(string Username, SourceScope[] Scopes, bool Admin, AccountPermissions? Permissions);
-internal sealed record AccountPermissions(bool Delete);
-internal sealed record RecycleBin(int? Count, JsonElement[]? Items);
-internal sealed record RecycledItem(string Id, string Source, string Path);
+internal sealed record Account(string Username, SourceScope[] Scopes, bool Admin, AccountPermissions? Permissions)
+{
+    internal bool CanDelete => Admin || Permissions?.Delete == true;
+    internal bool CanRestore => Admin || Permissions?.Modify == true;
+}
+internal sealed record AccountPermissions(bool Delete, bool Modify = false);
+internal sealed record RecycleBin(int? Count, RecycledItem[]? Items);
+internal sealed record RecycledItem(string Id, string Source, string Path, string Name, bool IsDir, DateTimeOffset DeletedAt);
 internal sealed record RecycleResult(RecycledItem[]? Recycled);
+internal sealed record RecycleChange(bool Changed, string? Message);
 internal sealed record FolderIconSetting(string? Icon);
 internal sealed record NativeWriteCapabilities(int Protocol, string[]? Sources);
 internal sealed record NativeUpload(string Upload, long Length, string? Revision);
@@ -37,7 +43,9 @@ internal sealed class FilePointApi : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private const string NativeFiles = "/__foldericons/native-files";
+    private const string RecycleEndpoint = "/__foldericons/recycle-bin";
     private readonly HttpClient client;
+    internal Uri RecycleBinPage => new(client.BaseAddress!, "/?plexpointRecycleBin=1");
 
     internal FilePointApi(Uri address, HttpMessageHandler? handler = null)
     {
@@ -116,20 +124,30 @@ internal sealed class FilePointApi : IDisposable
         }
     }
 
-    internal bool CanRecycle(Account account)
+    internal bool SupportsRecycleBin()
     {
-        if (!account.Admin && account.Permissions?.Delete != true)
-            return false;
-        try
-        {
-            // FileBrowser alone can permanently delete. Require FilePoint's recycle service.
-            var bin = Get<RecycleBin>("/__foldericons/recycle-bin");
-            return bin.Items is not null && bin.Count == bin.Items.Length;
-        }
+        try { ListRecycledItems(); return true; }
         catch (Exception error) when (error is HttpRequestException or IOException or JsonException or OperationCanceledException)
         {
             return false;
         }
+    }
+
+    internal RecycledItem[] ListRecycledItems()
+    {
+        var bin = Get<RecycleBin>(RecycleEndpoint);
+        if (bin.Items is not { } items || bin.Count != items.Length)
+            throw new InvalidDataException("FilePoint returned an invalid Recycle Bin listing.");
+        return items;
+    }
+
+    internal void ChangeRecycledItem(string id, bool restore)
+    {
+        using var content = new StringContent(JsonSerializer.Serialize(new { action = restore ? "restore" : "delete", ids = new[] { id } }),
+            Encoding.UTF8, "application/json");
+        var result = NativeRequest<RecycleChange>(restore ? HttpMethod.Post : HttpMethod.Delete, RecycleEndpoint, content);
+        if (!result.Changed)
+            throw new InvalidDataException("FilePoint could not confirm the Recycle Bin change.");
     }
 
     internal void Recycle(string source, string path)
