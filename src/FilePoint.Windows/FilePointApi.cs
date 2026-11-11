@@ -21,7 +21,11 @@ internal sealed record DiskSpace(long Total, long Free);
 internal sealed record ConnectedDevice(string? Name, string? Path, string? Source, string? Status, string? IconUrl);
 internal sealed record ConnectedDevices(ConnectedDevice[]? Devices);
 internal sealed record SourceScope(string Name, string? Scope);
-internal sealed record Account(string Username, SourceScope[] Scopes);
+internal sealed record Account(string Username, SourceScope[] Scopes, bool Admin, AccountPermissions? Permissions);
+internal sealed record AccountPermissions(bool Delete);
+internal sealed record RecycleBin(int? Count, JsonElement[]? Items);
+internal sealed record RecycledItem(string Id, string Source, string Path);
+internal sealed record RecycleResult(RecycledItem[]? Recycled);
 internal sealed record FolderIconSetting(string? Icon);
 internal sealed record NativeWriteCapabilities(int Protocol, string[]? Sources);
 internal sealed record NativeUpload(string Upload, long Length, string? Revision);
@@ -110,6 +114,30 @@ internal sealed class FilePointApi : IDisposable
         {
             return [];
         }
+    }
+
+    internal bool CanRecycle(Account account)
+    {
+        if (!account.Admin && account.Permissions?.Delete != true)
+            return false;
+        try
+        {
+            // FileBrowser alone can permanently delete. Require FilePoint's recycle service.
+            var bin = Get<RecycleBin>("/__foldericons/recycle-bin");
+            return bin.Items is not null && bin.Count == bin.Items.Length;
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    internal void Recycle(string source, string path)
+    {
+        var result = NativeRequest<RecycleResult>(HttpMethod.Delete,
+            Query("/api/resources", ("source", source), ("path", path)));
+        if (result.Recycled is not [{ Id.Length: > 0 } item] || item.Source != source || item.Path != path)
+            throw new InvalidDataException("FilePoint could not confirm the item reached its recycle bin.");
     }
 
     internal NativeUpload BeginWrite(string source, string path, bool existing, string? revision = null) =>

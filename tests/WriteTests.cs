@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using FilePoint.Windows;
+using Microsoft.VisualBasic.FileIO;
 
 internal static class WriteTests
 {
@@ -22,8 +23,16 @@ internal static class WriteTests
         using var api = new FilePointApi(new Uri("https://filepoint.example"), fixture);
         api.UseToken("fixture.header.signature");
         var recovery = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failedDelete = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var account = api.GetAccount();
+        Require(!api.CanRecycle(account with { Permissions = new AccountPermissions(false) }),
+            "Do not enable deletion for accounts without permission");
+        fixture.RecycleAvailable = false;
+        Require(!api.CanRecycle(account), "Do not enable deletion on a server without the recycle service");
+        fixture.RecycleAvailable = true;
+        Require(api.CanRecycle(account), "Enable deletion on a server with the recycle service");
         using var mount = new DriveMount(new FilePointDrive(api, new FolderIcons(), identity.User!, api.GetWritableSources(),
-            path => recovery.TrySetResult(path)));
+            path => recovery.TrySetResult(path), canRecycle: true, recycleFailed: name => failedDelete.TrySetResult(name)));
         string root = Path.Combine(mount.Path, "Documents");
         string local = Path.GetTempFileName();
         try
@@ -45,12 +54,63 @@ internal static class WriteTests
                 edit.WriteByte((byte)'!');
             }
             Await(() => Encoding.UTF8.GetString(fixture.Files["/existing.txt"]) == "aZ!", "Save again from the same handle");
+            File.AppendAllText(Path.Combine(root, "existing.txt"), " appended");
+            Await(() => Encoding.UTF8.GetString(fixture.Files["/existing.txt"]) == "aZ! appended", "Append to an existing file");
+            string replacement = Path.Combine(root, "replacement.txt");
+            File.WriteAllText(replacement, "replacement");
+            Await(() => fixture.Files.ContainsKey("/replacement.txt"), "Stage replacement contents");
+            string relocated = Path.Combine(root, "relocated.txt");
+            File.Move(replacement, relocated, overwrite: true);
+            Require(fixture.Files.ContainsKey("/relocated.txt"), "Move with overwrite enabled to an unused name");
+            File.Move(relocated, Path.Combine(root, "EXISTING.TXT"), overwrite: true);
+            Require(Encoding.UTF8.GetString(fixture.Files["/existing.txt"]) == "replacement" &&
+                !fixture.Files.ContainsKey("/EXISTING.TXT"), "Replace an existing file using a different case");
 
             Directory.CreateDirectory(Path.Combine(root, "New folder"));
             Require(fixture.Folders.ContainsKey("/New folder"), "Create a folder");
             File.Move(Path.Combine(root, "copied.bin"), Path.Combine(root, "renamed.bin"));
             Require(!fixture.Files.ContainsKey("/copied.bin") && fixture.Files["/renamed.bin"].SequenceEqual(copy),
                 "Rename a file without changing its data");
+            string renamed = Path.Combine(root, "renamed.bin");
+            FileSystem.DeleteFile(renamed, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+            Await(() => fixture.Recycled.TryGetValue("/renamed.bin", out var recycled) && recycled.SequenceEqual(copy),
+                "Explorer drive deletes move the original bytes to the server recycle bin");
+            Require(!Directory.EnumerateFiles(root).Contains(renamed), "A recycled file disappears from the mounted listing");
+            Directory.Delete(Path.Combine(root, "New folder"));
+            Await(() => !fixture.Folders.ContainsKey("/New folder"), "Delete an empty directory on the mounted drive");
+            string temporary = Path.Combine(root, "temporary.txt");
+            File.WriteAllText(temporary, "delete on close");
+            Await(() => fixture.Files.ContainsKey("/temporary.txt"), "Create a file for delete-on-close");
+            using (new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 4096, FileOptions.DeleteOnClose))
+                Require(fixture.Files.ContainsKey("/temporary.txt"), "Wait until the delete-on-close handle closes");
+            Await(() => fixture.Recycled.ContainsKey("/temporary.txt"), "Recycle the file when the delete-on-close handle closes");
+            string folder = Path.Combine(root, "Project");
+            Directory.CreateDirectory(folder);
+            string notes = Path.Combine(folder, "notes.txt");
+            File.WriteAllText(notes, "project notes");
+            Await(() => fixture.Files.ContainsKey("/Project/notes.txt"), "Create a file in a subfolder");
+            Require(!Directory.EnumerateFiles(folder).Any(path => Path.GetFileName(path) == "desktop.ini"),
+                "Shell copy and delete enumeration skips the generated desktop.ini");
+            Require(File.Exists(Path.Combine(folder, "desktop.ini")), "Explorer can still open generated folder icon metadata");
+            string copied = Path.Combine(root, "Project copy");
+            FileSystem.CopyDirectory(folder, copied, UIOption.OnlyErrorDialogs);
+            Await(() => fixture.Files.ContainsKey("/Project copy/notes.txt"), "Copy a populated folder in the Shell");
+            string renamedFolder = Path.Combine(root, "Renamed project");
+            Directory.Move(copied, renamedFolder);
+            Require(fixture.Files.ContainsKey("/Renamed project/notes.txt"), "Rename a populated folder within the same source");
+            string archive = Path.Combine(mount.Path, "Archive");
+            FileSystem.MoveFile(notes, Path.Combine(archive, "notes.txt"), UIOption.OnlyErrorDialogs);
+            Await(() => fixture.Files.ContainsKey("/@Archive/notes.txt") && !fixture.Files.ContainsKey("/Project/notes.txt"),
+                "Move a file between two FilePoint sources in the Shell");
+            FileSystem.MoveDirectory(renamedFolder, Path.Combine(archive, "Project copy"), UIOption.OnlyErrorDialogs);
+            Await(() => fixture.Files.ContainsKey("/@Archive/Project copy/notes.txt") && !fixture.Folders.ContainsKey("/Renamed project"),
+                "Move a populated folder between two FilePoint sources in the Shell");
+            FileSystem.DeleteDirectory(Path.Combine(archive, "Project copy"), UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+            Await(() => !fixture.Folders.ContainsKey("/@Archive/Project copy"), "Recycle a populated folder in the Shell");
+            fixture.RejectRecycle = true;
+            File.Delete(Path.Combine(root, "existing.txt"));
+            Require(failedDelete.Task.WaitAsync(TimeSpan.FromSeconds(12)).GetAwaiter().GetResult() == "existing.txt" &&
+                fixture.Files.ContainsKey("/existing.txt"), "Report a recycle failure and preserve the server file");
             using (var conflict = File.Create(Path.Combine(root, "conflict.txt")))
             {
                 conflict.Write("my changes"u8);
@@ -62,7 +122,7 @@ internal static class WriteTests
                 "Keep the server copy and local edits on conflict");
             File.Delete(kept);
             Directory.Delete(Path.GetDirectoryName(kept)!);
-            Console.WriteLine("Passed writable mount, multi-chunk copy, file editing, folder creation, and conflict recovery.");
+            Console.WriteLine("Passed native file editing, replacement, folder copies, moves between sources, recycling, and conflict recovery.");
         }
         finally { File.Delete(local); }
     }
@@ -85,6 +145,9 @@ internal static class WriteTests
             ["/existing.txt"] = "abc"u8.ToArray()
         };
         internal ConcurrentDictionary<string, byte> Folders { get; } = new();
+        internal ConcurrentDictionary<string, byte[]> Recycled { get; } = new();
+        internal bool RecycleAvailable { get; set; } = true;
+        internal bool RejectRecycle { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(Send(request, cancellationToken));
@@ -93,17 +156,37 @@ internal static class WriteTests
         {
             var uri = request.RequestUri!;
             var query = HttpUtility.ParseQueryString(uri.Query);
+            string prefix = query["source"] == "Archive" ? "/@Archive" : "";
             if (uri.AbsolutePath == "/api/users")
-                return Json(new { username = "Test", scopes = new[] { new { name = "Documents", scope = "/" } } });
+                return Json(new { username = "Test", permissions = new { delete = true },
+                    scopes = new[] { new { name = "Documents", scope = "/" }, new { name = "Archive", scope = "/" } } });
+            if (uri.AbsolutePath == "/__foldericons/icons" && query["source"] == "Documents" && query["path"] == "")
+                return Json(new { icons = new { Project = new { material = "folder" } } });
+            if (uri.AbsolutePath == "/__foldericons/recycle-bin")
+                return RecycleAvailable ? Json(new { count = 0, items = Array.Empty<object>() }) : new(HttpStatusCode.NotFound);
+            if (uri.AbsolutePath == "/api/resources" && request.Method == HttpMethod.Delete)
+            {
+                string path = query["path"]!;
+                if (RejectRecycle)
+                    return new(HttpStatusCode.Forbidden);
+                if (Files.TryRemove(prefix + path, out var removed))
+                    Recycled[prefix + path] = removed;
+                else if (!Folders.TryRemove(prefix + path, out _))
+                    return new(HttpStatusCode.NotFound);
+                return Json(new { recycled = new[] { new { id = "recycled-item", source = query["source"], path } } });
+            }
             if (uri.AbsolutePath == "/api/resources")
-                return query["path"] == "/"
-                    ? Json(new
-                    {
-                        files = Files.Select(file => new { name = file.Key[1..], size = file.Value.Length }),
-                        folders = Folders.Keys.Select(folder => new { name = folder[1..] })
-                    })
-                    : Json(new { });
-            if (uri.AbsolutePath == "/api/resources/download" && query["file"] is { } name && Files.TryGetValue(name, out var bytes))
+            {
+                string directory = prefix + query["path"]!.TrimEnd('/') + "/";
+                bool Child(string path) => path.StartsWith(directory, StringComparison.Ordinal)
+                    && !path[directory.Length..].Contains('/') && path != "/@Archive";
+                return Json(new
+                {
+                    files = Files.Where(file => Child(file.Key)).Select(file => new { name = file.Key[directory.Length..], size = file.Value.Length }),
+                    folders = Folders.Keys.Where(Child).Select(folder => new { name = folder[directory.Length..] })
+                });
+            }
+            if (uri.AbsolutePath == "/api/resources/download" && query["file"] is { } name && Files.TryGetValue(prefix + name, out var bytes))
             {
                 if (request.Method == HttpMethod.Head)
                     return new(HttpStatusCode.OK) { Content = new ByteArrayContent([]) { Headers = { ContentLength = bytes.Length } } };
@@ -116,10 +199,10 @@ internal static class WriteTests
             if (uri.AbsolutePath == "/__foldericons/native-files")
             {
                 if (request.Method == HttpMethod.Get)
-                    return Json(new { protocol = 1, sources = new[] { "Documents" } });
+                    return Json(new { protocol = 1, sources = new[] { "Documents", "Archive" } });
                 if (request.Method == HttpMethod.Post)
                 {
-                    string path = query["path"]!;
+                    string path = prefix + query["path"]!;
                     if (query["mode"] == "directory")
                     {
                         Folders.TryAdd(path, 0);
@@ -127,10 +210,25 @@ internal static class WriteTests
                     }
                     if (query["mode"] == "rename")
                     {
-                        string destination = query["destination"]!;
+                        string destination = prefix + query["destination"]!;
+                        if (Folders.ContainsKey(path))
+                        {
+                            if (!Folders.TryAdd(destination, 0))
+                                return new(HttpStatusCode.Conflict);
+                            foreach (var child in Files.Where(child => child.Key.StartsWith(path + "/", StringComparison.Ordinal)).ToArray())
+                            {
+                                Files[destination + child.Key[path.Length..]] = child.Value;
+                                Files.TryRemove(child.Key, out _);
+                            }
+                            Folders.TryRemove(path, out _);
+                            return Json(new { length = 0, revision = "directory" });
+                        }
                         if (!Files.TryGetValue(path, out var moved))
                             return new(HttpStatusCode.NotFound);
-                        if (!Files.TryAdd(destination, moved))
+                        bool updated = query["replace"] == "true"
+                            ? Files.TryGetValue(destination, out var existing) && Files.TryUpdate(destination, moved, existing)
+                            : Files.TryAdd(destination, moved);
+                        if (!updated)
                             return new(HttpStatusCode.Conflict);
                         Files.TryRemove(path, out _);
                         return Json(new { length = moved.Length, revision = Revision(moved) });

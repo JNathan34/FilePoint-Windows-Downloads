@@ -251,7 +251,8 @@ internal partial class MainWindow : Window
         ShowStatus(null);
         try
         {
-            drive = await Task.Run(() => MountedDrive.Connect(server, apiTokenMode, user, secret, code, ReportUploadFailure));
+            drive = await Task.Run(() => MountedDrive.Connect(server, apiTokenMode, user, secret, code,
+                ReportUploadFailure, ReportRecycleFailure));
             AddressBox.Text = server.AbsoluteUri.TrimEnd('/');
             PasswordInput.Clear();
             TokenInput.Clear();
@@ -393,6 +394,15 @@ internal partial class MainWindow : Window
         const string message = "FilePoint kept a local copy. Open Unsaved Uploads from the tray menu.";
         ShowStatus($"Couldn’t save {Path.GetFileName(path)} to the server. {message}");
         tray.ShowBalloonTip(8000, "FilePoint save failed", message, Forms.ToolTipIcon.Warning);
+    });
+
+    private void ReportRecycleFailure(string name) => Dispatcher.BeginInvoke(() =>
+    {
+        if (exitRequested)
+            return;
+        string message = $"FilePoint couldn’t confirm that {name} moved to the Recycle Bin. Refresh Explorer and check FilePoint’s Recycle Bin.";
+        ShowStatus(message);
+        tray.ShowBalloonTip(8000, "FilePoint delete failed", message, Forms.ToolTipIcon.Warning);
     });
 
     private async Task CheckForUpdate()

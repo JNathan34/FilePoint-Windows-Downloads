@@ -24,6 +24,8 @@ internal sealed class FilePointDrive : IDokanOperations
     private readonly SecurityIdentifier user;
     private readonly HashSet<string> writableSources;
     private readonly Action<string>? uploadFailed;
+    private readonly bool canRecycle;
+    private readonly Action<string>? recycleFailed;
     private readonly ConcurrentDictionary<string, byte> writers = new(NameComparer);
     internal bool CanWrite => writableSources.Count > 0;
     private readonly ConcurrentDictionary<string, CachedDirectory> directories = new(NameComparer);
@@ -54,13 +56,16 @@ internal sealed class FilePointDrive : IDokanOperations
     }
 
     internal FilePointDrive(FilePointApi api, FolderIcons icons, SecurityIdentifier user,
-        IEnumerable<string>? writableSources = null, Action<string>? uploadFailed = null)
+        IEnumerable<string>? writableSources = null, Action<string>? uploadFailed = null,
+        bool canRecycle = false, Action<string>? recycleFailed = null)
     {
         this.api = api;
         this.icons = icons;
         this.user = user;
         this.writableSources = new HashSet<string>(writableSources ?? [], StringComparer.Ordinal);
         this.uploadFailed = uploadFailed;
+        this.canRecycle = canRecycle;
+        this.recycleFailed = recycleFailed;
         sddl = $"O:{user}G:{user}D:P(A;;FA;;;SY)(A;;{(CanWrite ? "FA" : "FRFX")};;;{user})";
     }
 
@@ -102,8 +107,14 @@ internal sealed class FilePointDrive : IDokanOperations
             {
                 if (mode == FileMode.CreateNew)
                     return DokanResult.FileExists;
-                if (!IsWritable(item) || options.HasFlag(FileOptions.DeleteOnClose))
+                if (!IsWritable(item))
                     return ReadOnly;
+                if (options.HasFlag(FileOptions.DeleteOnClose))
+                {
+                    var status = CheckRecycle(item, null);
+                    if (status != DokanResult.Success)
+                        return status;
+                }
                 const uint writeData = 0x50000006;
                 if (!item.Directory && (mode is FileMode.Create or FileMode.Truncate or FileMode.Append ||
                     ((uint)access & writeData) != 0))
@@ -168,10 +179,44 @@ internal sealed class FilePointDrive : IDokanOperations
 
     public void Cleanup(string name, IDokanFileInfo info)
     {
-        if (info.Context is OpenFile { Writable: not null } open)
+        if (info.Context is not OpenFile open)
+            return;
+        lock (open)
+        {
             open.DeletePending = info.DeletePending;
-        else
-            info.Context = null;
+            if (open.DeletePending && open.Writable?.IsNew != true && CanRecycle(open.Node))
+            {
+                var node = open.Node;
+                bool reserved = open.Writable is not null || writers.TryAdd(node.WindowsPath, 0);
+                try
+                {
+                    if (!reserved)
+                        throw new IOException("The item is open for writing.");
+                    api.Recycle(node.Source, node.Path);
+                    open.Writable?.Discard();
+                    directories.TryRemove(node.WindowsPath[..node.WindowsPath.LastIndexOf('\\')], out _);
+                    if (node.Directory)
+                        directories.Clear();
+                }
+                catch (Exception)
+                {
+                    recycleFailed?.Invoke(node.Name);
+                    if (open.Writable is not null)
+                        open.FailedWrite = true; // Preserve any unsaved changes locally.
+                }
+                finally
+                {
+                    if (reserved && open.Writable is null)
+                        writers.TryRemove(node.WindowsPath, out _);
+                }
+            }
+            else if (open.DeletePending && open.Writable?.IsNew == true)
+            {
+                open.Writable.Discard();
+            }
+            if (open.Writable is null)
+                info.Context = null;
+        }
     }
 
     public void CloseFile(string name, IDokanFileInfo info)
@@ -185,9 +230,7 @@ internal sealed class FilePointDrive : IDokanOperations
             {
                 using (local)
                 {
-                    if (open.DeletePending || info.DeletePending)
-                        local.Discard();
-                    else if (!open.FailedWrite)
+                    if (!open.DeletePending && !info.DeletePending && !open.FailedWrite)
                         Save(open, local, info);
                 }
             }
@@ -281,6 +324,8 @@ internal sealed class FilePointDrive : IDokanOperations
             if (!folder.Directory)
                 return DokanResult.NotADirectory;
             files = Children(folder)
+                // Explorer opens the icon files by name. Wildcard enumeration feeds folder copy and delete.
+                .Where(node => node.Data is null || NameComparer.Equals(pattern, node.Name))
                 .Where(node => FileSystemName.MatchesWin32Expression(pattern, node.Name))
                 .Select(Info).ToArray();
             return DokanResult.Success;
@@ -362,9 +407,36 @@ internal sealed class FilePointDrive : IDokanOperations
     public NtStatus SetFileTime(string name, DateTime? created, DateTime? accessed, DateTime? written, IDokanFileInfo info) => WritableMetadata(info);
     private NtStatus WritableMetadata(IDokanFileInfo info) => info.Context is OpenFile open && IsWritable(open.Node)
         ? DokanResult.Success : ReadOnly;
-    public NtStatus DeleteFile(string name, IDokanFileInfo info) => info.Context is OpenFile { Writable.IsNew: true }
-        ? DokanResult.Success : ReadOnly;
-    public NtStatus DeleteDirectory(string name, IDokanFileInfo info) => ReadOnly;
+    private bool CanRecycle(Node node) => canRecycle && IsWritable(node) && node.Path != "/";
+
+    private NtStatus CheckRecycle(Node node, WritableFile? writable)
+    {
+        if (writable?.IsNew == true)
+            return DokanResult.Success;
+        if (!CanRecycle(node))
+            return ReadOnly;
+        if (writable is null && writers.ContainsKey(node.WindowsPath))
+            return DokanResult.SharingViolation;
+        if (node.Directory)
+        {
+            var listing = api.List(node.Source, node.Path);
+            if (listing.Files is { Length: > 0 } || listing.Folders is { Length: > 0 })
+                return NtStatus.DirectoryNotEmpty;
+        }
+        return DokanResult.Success;
+    }
+
+    public NtStatus DeleteFile(string name, IDokanFileInfo info)
+    {
+        try
+        {
+            var open = info.Context as OpenFile;
+            return CheckRecycle(open?.Node ?? Resolve(name), open?.Writable);
+        }
+        catch (Exception exception) { return Status(exception); }
+    }
+
+    public NtStatus DeleteDirectory(string name, IDokanFileInfo info) => DeleteFile(name, info);
     public NtStatus MoveFile(string name, string target, bool replace, IDokanFileInfo info)
     {
         if (info.Context is not OpenFile open || !IsWritable(open.Node))
@@ -379,33 +451,48 @@ internal sealed class FilePointDrive : IDokanOperations
                     return DokanResult.AccessDenied;
                 var parent = Resolve(target[..targetSeparator]);
                 string leaf = target[(targetSeparator + 1)..];
-                if (!parent.Directory || !ValidName(leaf) || node.Source != parent.Source)
+                if (!parent.Directory || !ValidName(leaf) || !IsWritable(parent))
                     return DokanResult.AccessDenied;
-                string targetPath = parent.Path.TrimEnd('/') + "/" + leaf;
+                // A Shell cross-source move copies first and sends the original to FilePoint's Recycle Bin.
+                if (node.Source != parent.Source)
+                    return CanRecycle(node) ? NtStatus.NotSameDevice : DokanResult.AccessDenied;
                 string targetWindowsPath = ChildPath(parent, leaf);
+                bool sameName = NameComparer.Equals(node.WindowsPath, targetWindowsPath);
+                var destination = sameName ? null : Children(parent).FirstOrDefault(child => NameComparer.Equals(child.Name, leaf));
+                if (destination is not null && (!replace || destination.Directory || !IsWritable(destination)))
+                    return DokanResult.FileExists;
+                string targetPath = destination?.Path ?? parent.Path.TrimEnd('/') + "/" + leaf;
                 if (targetPath == node.Path)
                     return DokanResult.Success;
-                bool reserve = open.Writable is not null && !NameComparer.Equals(node.WindowsPath, targetWindowsPath);
-                if (reserve && !writers.TryAdd(targetWindowsPath, 0))
+                bool reserveSource = open.Writable is null;
+                if (reserveSource && !writers.TryAdd(node.WindowsPath, 0))
                     return DokanResult.SharingViolation;
+                if (!sameName && !writers.TryAdd(targetWindowsPath, 0))
+                {
+                    if (reserveSource)
+                        writers.TryRemove(node.WindowsPath, out _);
+                    return DokanResult.SharingViolation;
+                }
                 try
                 {
                     if (open.Writable is { } local)
                         Save(open, local, info);
-                    var moved = api.Rename(node.Source, node.Path, targetPath, replace);
+                    var moved = api.Rename(node.Source, node.Path, targetPath, replace: destination is not null);
                     open.Writable?.Renamed(targetPath, moved.Revision);
-                    open.Node = node with { Name = leaf, Path = targetPath, WindowsPath = targetWindowsPath };
+                    open.Node = node with { Name = destination?.Name ?? leaf, Path = targetPath, WindowsPath = targetWindowsPath };
                     directories.TryRemove(node.WindowsPath[..node.WindowsPath.LastIndexOf('\\')], out _);
                     directories.TryRemove(parent.WindowsPath, out _);
                     if (node.Directory)
                         directories.Clear();
-                    if (reserve)
+                    if (!sameName && !reserveSource)
                         writers.TryRemove(node.WindowsPath, out _);
                     return DokanResult.Success;
                 }
                 finally
                 {
-                    if (reserve && open.Node == node)
+                    if (reserveSource)
+                        writers.TryRemove(node.WindowsPath, out _);
+                    if (!sameName && (reserveSource || open.Node == node))
                         writers.TryRemove(targetWindowsPath, out _);
                 }
             }
@@ -557,7 +644,7 @@ internal sealed class FilePointDrive : IDokanOperations
                 if (!entries.ContainsKey(name))
                 {
                     entries.Add(name, Synthetic(name, image));
-                    entries["desktop.ini"] = Synthetic("desktop.ini", FolderIcons.DesktopIni(choice));
+                    entries.TryAdd("desktop.ini", Synthetic("desktop.ini", FolderIcons.DesktopIni(choice)));
                 }
             }
             catch (Exception error) when (error is IOException or HttpRequestException or NotSupportedException

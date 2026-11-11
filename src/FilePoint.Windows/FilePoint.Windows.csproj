@@ -8,7 +8,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>FilePoint.Windows</AssemblyName>
     <ApplicationIcon>Assets\FilePoint.ico</ApplicationIcon>
-    <Version>1.4.8</Version>
+    <Version>1.4.10</Version>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="FilePoint.Windows.Tests" />
