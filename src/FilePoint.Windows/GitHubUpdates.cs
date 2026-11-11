@@ -82,8 +82,10 @@ internal sealed class GitHubUpdates : IDisposable
 
     internal async Task<string> DownloadAsync(GitHubUpdate update, CancellationToken cancellation, IProgress<int>? progress = null)
     {
-        string prefix = Path.Combine(Path.GetTempPath(), $"FilePoint-Setup-{update.Version}-{Guid.NewGuid():N}");
-        string partial = prefix + ".part", installer = prefix + ".exe";
+        string directory = Directory.CreateTempSubdirectory("FilePoint-Update-").FullName;
+        // WiX Burn uses the executable's name when caching it for repair and later upgrades.
+        string installer = Path.Combine(directory, update.AssetName);
+        string partial = installer + ".part";
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, $"{ReleasePage}/download/v{update.Version}/{update.AssetName}");
@@ -116,6 +118,7 @@ internal sealed class GitHubUpdates : IDisposable
         {
             File.Delete(partial);
             File.Delete(installer);
+            Directory.Delete(directory);
             throw;
         }
     }

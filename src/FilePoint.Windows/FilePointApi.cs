@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -22,12 +23,16 @@ internal sealed record ConnectedDevices(ConnectedDevice[]? Devices);
 internal sealed record SourceScope(string Name, string? Scope);
 internal sealed record Account(string Username, SourceScope[] Scopes);
 internal sealed record FolderIconSetting(string? Icon);
+internal sealed record NativeWriteCapabilities(int Protocol, string[]? Sources);
+internal sealed record NativeUpload(string Upload, long Length, string? Revision);
+internal sealed record NativeCommit(long Length, string Revision);
 
 internal sealed class VerificationRequiredException : Exception;
 
 internal sealed class FilePointApi : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    private const string NativeFiles = "/__foldericons/native-files";
     private readonly HttpClient client;
 
     internal FilePointApi(Uri address, HttpMessageHandler? handler = null)
@@ -93,6 +98,57 @@ internal sealed class FilePointApi : IDisposable
         Get<IconManifest>(IconQuery("/__foldericons/icons", source, path));
 
     internal ConnectedDevice[] GetConnectedDevices() => Get<ConnectedDevices>("/__foldericons/devices").Devices ?? [];
+
+    internal string[] GetWritableSources()
+    {
+        try
+        {
+            var capabilities = Get<NativeWriteCapabilities>(NativeFiles);
+            return capabilities.Protocol == 1 ? capabilities.Sources ?? [] : [];
+        }
+        catch (Exception error) when (error is HttpRequestException or IOException or JsonException or OperationCanceledException)
+        {
+            return [];
+        }
+    }
+
+    internal NativeUpload BeginWrite(string source, string path, bool existing, string? revision = null) =>
+        NativeRequest<NativeUpload>(HttpMethod.Post,
+            Query(NativeFiles, ("source", source), ("path", path), ("mode", existing ? "edit" : "create"),
+                ("revision", revision ?? "")));
+
+    internal void CreateDirectory(string source, string path) =>
+        NativeRequest<JsonElement>(HttpMethod.Post, Query(NativeFiles,
+            ("source", source), ("path", path), ("mode", "directory")));
+
+    internal NativeCommit Rename(string source, string path, string destination, bool replace) =>
+        NativeRequest<NativeCommit>(HttpMethod.Post, Query(NativeFiles, ("source", source), ("path", path),
+            ("mode", "rename"), ("destination", destination), ("replace", replace ? "true" : "false")));
+
+    internal void WriteChunk(string upload, long offset, byte[] bytes, int count)
+    {
+        using var content = new ByteArrayContent(bytes, 0, count);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        NativeRequest<JsonElement>(HttpMethod.Put, Query(NativeFiles,
+            ("upload", upload), ("offset", offset.ToString(CultureInfo.InvariantCulture))), content);
+    }
+
+    internal NativeCommit CommitWrite(string upload, long length) => NativeRequest<NativeCommit>(HttpMethod.Patch,
+        Query(NativeFiles, ("upload", upload), ("length", length.ToString(CultureInfo.InvariantCulture))));
+
+    internal void CancelWrite(string upload) => NativeRequest<JsonElement>(HttpMethod.Delete,
+        Query(NativeFiles, ("upload", upload)));
+
+    private T NativeRequest<T>(HttpMethod method, string path, HttpContent? content = null)
+    {
+        using var request = new HttpRequestMessage(method, path) { Content = content };
+        using var response = client.Send(request);
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"FilePoint could not complete the file operation (HTTP {(int)response.StatusCode}).",
+                null, response.StatusCode);
+        using var data = response.Content.ReadAsStream();
+        return JsonSerializer.Deserialize<T>(data, Json) ?? throw new InvalidDataException("FilePoint returned an empty write response.");
+    }
 
     internal DiskSpace? GetDiskSpace()
     {

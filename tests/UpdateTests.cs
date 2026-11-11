@@ -29,12 +29,14 @@ internal static class UpdateTests
         string setup = await github.DownloadAsync(update!, CancellationToken.None);
         try
         {
+            Require(Path.GetFileName(setup) == update!.AssetName, "Keep the installer name used by the WiX cache");
             Require((await File.ReadAllBytesAsync(setup)).AsSpan().SequenceEqual(GitHubFixture.Installer), "Verified setup bytes");
             Require(File.ReadAllText(setup + ":Zone.Identifier").Contains("ZoneId=3"), "Windows download marking");
         }
         finally
         {
             File.Delete(setup);
+            Directory.Delete(Path.GetDirectoryName(setup)!);
         }
 
         await Reject<InvalidDataException>(() =>

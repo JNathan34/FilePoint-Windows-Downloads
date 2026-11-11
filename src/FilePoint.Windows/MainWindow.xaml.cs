@@ -32,6 +32,7 @@ internal partial class MainWindow : Window
     private SignInMode signInMode;
     private bool busy;
     private bool exitRequested;
+    private bool recoveryPending;
 
     internal MainWindow()
     {
@@ -43,11 +44,19 @@ internal partial class MainWindow : Window
         UiTheme.StyleCaption(this);
 
         tray = new Forms.NotifyIcon { Icon = appIcon, Text = "FilePoint for Windows" };
-        trayMenu = new TrayMenu(appIcon, ShowWindow, OpenDrive, ShowUpdates, () => { exitRequested = true; Close(); });
-        trayMenu.Opening += (_, _) => trayMenu.RefreshState(drive?.Path, busy, availableUpdate?.Version);
+        trayMenu = new TrayMenu(appIcon, ShowWindow, OpenDrive, ShowUpdates, () => { exitRequested = true; Close(); },
+            () => OpenExternal(WritableFile.RecoveryPath));
+        trayMenu.Opening += (_, _) => trayMenu.RefreshState(drive?.Path, busy, availableUpdate?.Version,
+            Directory.Exists(WritableFile.RecoveryPath));
         tray.ContextMenuStrip = trayMenu;
         tray.DoubleClick += (_, _) => Dispatcher.Invoke(ShowWindow);
-        tray.BalloonTipClicked += (_, _) => Dispatcher.Invoke(ShowUpdates);
+        tray.BalloonTipClicked += (_, _) => Dispatcher.Invoke(() =>
+        {
+            if (recoveryPending)
+                OpenExternal(WritableFile.RecoveryPath);
+            else
+                ShowUpdates();
+        });
         tray.Visible = true;
 
         Loaded += async (_, _) =>
@@ -242,7 +251,7 @@ internal partial class MainWindow : Window
         ShowStatus(null);
         try
         {
-            drive = await Task.Run(() => MountedDrive.Connect(server, apiTokenMode, user, secret, code));
+            drive = await Task.Run(() => MountedDrive.Connect(server, apiTokenMode, user, secret, code, ReportUploadFailure));
             AddressBox.Text = server.AbsoluteUri.TrimEnd('/');
             PasswordInput.Clear();
             TokenInput.Clear();
@@ -376,6 +385,16 @@ internal partial class MainWindow : Window
         catch (Exception) { ShowStatus("Windows couldn’t open that location."); }
     }
 
+    private void ReportUploadFailure(string path) => Dispatcher.BeginInvoke(() =>
+    {
+        if (exitRequested)
+            return;
+        recoveryPending = true;
+        const string message = "FilePoint kept a local copy. Open Unsaved Uploads from the tray menu.";
+        ShowStatus($"Couldn’t save {Path.GetFileName(path)} to the server. {message}");
+        tray.ShowBalloonTip(8000, "FilePoint save failed", message, Forms.ToolTipIcon.Warning);
+    });
+
     private async Task CheckForUpdate()
     {
         if (checkingUpdate)
@@ -391,6 +410,7 @@ internal partial class MainWindow : Window
             if (tray.Visible && update is not null && update.Version != notifiedVersion)
             {
                 notifiedVersion = update.Version;
+                recoveryPending = false;
                 tray.ShowBalloonTip(5000, "FilePoint update", $"Version {update.Version} is available.", Forms.ToolTipIcon.Info);
             }
         }
@@ -432,9 +452,15 @@ internal partial class MainWindow : Window
             return;
         try
         {
+            using var setup = Process.Start(new ProcessStartInfo(installer)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(installer)!
+            });
+            if (setup is null)
+                throw new IOException("Windows did not start FilePoint Setup.");
             exitRequested = true;
             Close();
-            Process.Start(new ProcessStartInfo(installer) { UseShellExecute = true });
         }
         catch (Exception error)
         {

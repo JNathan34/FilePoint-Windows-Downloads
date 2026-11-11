@@ -13,10 +13,11 @@ internal sealed class TrayMenu : ContextMenuStrip
     private readonly ToolStripMenuItem browse;
     private readonly ToolStripMenuItem updates;
     private readonly ToolStripMenuItem quit;
+    private readonly ToolStripMenuItem recovery;
     private readonly MenuRenderer themedRenderer;
     private readonly ToolStripSystemRenderer contrastRenderer = new();
 
-    internal TrayMenu(Icon icon, Action open, Action browse, Action updates, Action quit)
+    internal TrayMenu(Icon icon, Action open, Action browse, Action updates, Action quit, Action openRecovery)
     {
         themedRenderer = new MenuRenderer(icon.ToBitmap());
         Renderer = themedRenderer;
@@ -27,11 +28,12 @@ internal sealed class TrayMenu : ContextMenuStrip
         AddAction("Open FilePoint", "\uE8A7", open);
         this.browse = AddAction("Open in File Explorer", "\uED25", browse);
         this.updates = AddAction("Updates…", "\uE72C", updates);
+        recovery = AddAction("Open Unsaved Uploads", "\uED25", openRecovery);
         Items.Add(new ToolStripSeparator());
         this.quit = AddAction("Quit FilePoint", "\uE8BB", quit);
     }
 
-    internal void RefreshState(string? mountPath, bool busy, Version? update)
+    internal void RefreshState(string? mountPath, bool busy, Version? update, bool hasRecoveryFolder)
     {
         string status = busy ? "Working…" : mountPath is { Length: >= 2 }
             ? $"Connected · {mountPath[..2]}" : "Not connected";
@@ -41,6 +43,7 @@ internal sealed class TrayMenu : ContextMenuStrip
         browse.Enabled = mountPath is not null && !busy;
         updates.Text = update is null ? "Updates…" : $"Update {update} available";
         updates.Enabled = quit.Enabled = !busy;
+        recovery.Visible = hasRecoveryFolder;
         Renderer = SystemInformation.HighContrast ? contrastRenderer : themedRenderer;
         heading.Size = new Size(LogicalToDeviceUnits(RowWidth), LogicalToDeviceUnits(53));
         ApplyShape();

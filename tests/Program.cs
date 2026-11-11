@@ -67,7 +67,10 @@ internal static class Program
         TestScopedDevices(icons);
 
         if (args.Contains("--native"))
+        {
             TestNative(api, icons, fixture);
+            WriteTests.Run();
+        }
         SignInTests.Run(args);
     }
 

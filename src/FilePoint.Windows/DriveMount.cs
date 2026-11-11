@@ -47,7 +47,8 @@ internal sealed class DriveMount : IDisposable
             .ConfigureOptions(options =>
             {
                 options.MountPoint = candidate;
-                options.Options = DokanOptions.CurrentSession | DokanOptions.WriteProtection;
+                options.Options = DokanOptions.CurrentSession |
+                    (fileSystem.CanWrite ? 0 : DokanOptions.WriteProtection);
                 options.TimeOut = TimeSpan.FromSeconds(60);
             })
             .Build(fileSystem);

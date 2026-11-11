@@ -35,7 +35,8 @@ internal sealed class MountedDrive(DriveMount host, FilePointApi api, string use
     internal string Username { get; } = username;
     internal string Path => host.Path;
 
-    internal static MountedDrive Connect(Uri server, bool apiTokenMode, string name, string secret, string code)
+    internal static MountedDrive Connect(Uri server, bool apiTokenMode, string name, string secret, string code,
+        Action<string> uploadFailed)
     {
         var api = new FilePointApi(server);
         DriveMount? host = null;
@@ -49,7 +50,7 @@ internal sealed class MountedDrive(DriveMount host, FilePointApi api, string use
             if (account.Scopes is not { Length: > 0 })
                 throw new UnauthorizedAccessException("This FilePoint account has no storage sources.");
             using var identity = WindowsIdentity.GetCurrent();
-            var fileSystem = new FilePointDrive(api, new FolderIcons(), identity.User!);
+            var fileSystem = new FilePointDrive(api, new FolderIcons(), identity.User!, api.GetWritableSources(), uploadFailed);
             host = new DriveMount(fileSystem);
             ExplorerIntegration.Register(host.Path);
             return new MountedDrive(host, api, account.Username);
