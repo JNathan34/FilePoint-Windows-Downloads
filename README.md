@@ -12,6 +12,11 @@
   <a href="https://github.com/JNathan34/FilePoint-Windows-Downloads/releases/latest"><img src="https://img.shields.io/github/v/release/JNathan34/FilePoint-Windows-Downloads?label=Download%20FilePoint&color=2563eb&style=for-the-badge" alt="Download the latest release"></a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/JNathan34/FilePoint-Server"><strong>FilePoint Server</strong></a> ·
+  <a href="https://github.com/JNathan34/FilePoint-Server#configure-an-instance">Set up your server</a>
+</p>
+
 ## Install FilePoint
 
 | Your PC | Download |
@@ -24,6 +29,16 @@
 3. Select **Connect** to open your FilePoint drive in Explorer.
 
 ## A closer look
+
+### FilePoint drive in Windows File Explorer
+
+[![FilePoint (F:) in Windows File Explorer showing server drives, folders, Connected devices, and the Recycle Bin](docs/screenshots/explorer-drive-root.png)](docs/screenshots/explorer-drive-root.png)
+
+### Documents › College › ICT LEVEL 3
+
+[![ICT LEVEL 3 in Windows File Explorer showing the course folders with custom icons](docs/screenshots/explorer-ict-level-3.png)](docs/screenshots/explorer-ict-level-3.png)
+
+### Sign-in and tray controls
 
 <table>
   <tr>
