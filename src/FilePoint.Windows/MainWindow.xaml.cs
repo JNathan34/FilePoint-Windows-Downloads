@@ -60,11 +60,10 @@ internal partial class MainWindow : Window
         });
         tray.Visible = true;
 
-        Loaded += async (_, _) =>
+        Loaded += (_, _) =>
         {
             UsernameBox.Focus();
-            updateTimer.Start();
-            await CheckForUpdate();
+            StartUpdateChecks();
         };
         updateTimer.Tick += async (_, _) => await CheckForUpdate();
         StateChanged += (_, _) =>
@@ -96,6 +95,28 @@ internal partial class MainWindow : Window
         catch (Exception) { /* Password sign-in remains available if the saved API token cannot be read. */ }
     }
 
+    internal async Task Start(bool startInTray)
+    {
+        if (startInTray)
+            StartUpdateChecks();
+        if (saved is not { } connection || !Uri.TryCreate(connection.Address, UriKind.Absolute, out var server))
+            return;
+
+        AddressBox.Text = connection.Address;
+        UsernameBox.Text = connection.Username ?? "";
+        RememberLogin.IsChecked = connection.HasPassword;
+        await ConnectToServer(server, apiTokenMode: !connection.HasPassword, connection.Username ?? "", "", "",
+            remember: true, usesSavedToken: false, openExplorer: false, reconnect: connection);
+    }
+
+    private void StartUpdateChecks()
+    {
+        if (updateTimer.IsEnabled)
+            return;
+        updateTimer.Start();
+        _ = CheckForUpdate();
+    }
+
     private void OpenOptions(object sender, RoutedEventArgs args)
     {
         var menu = new ContextMenu { PlacementTarget = MoreButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
@@ -103,10 +124,28 @@ internal partial class MainWindow : Window
         AddOption(availableUpdate is null ? "Updates…" : $"Update {availableUpdate.Version} available", ShowUpdates);
         if (drive?.HasRecycleBin == true)
             AddOption("Recycle Bin", ShowRecycleBin);
+        var startup = new MenuItem
+        {
+            Header = "Start with Windows",
+            Style = (Style)FindResource(typeof(MenuItem)),
+            IsCheckable = true
+        };
+        try { startup.IsChecked = WindowsStartup.IsEnabled; }
+        catch (IOException) { startup.IsEnabled = false; }
+        startup.Click += (_, _) =>
+        {
+            try { WindowsStartup.SetEnabled(startup.IsChecked); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException)
+            {
+                startup.IsChecked = !startup.IsChecked;
+                ShowStatus("Windows couldn’t change FilePoint’s startup setting.");
+            }
+        };
+        menu.Items.Add(startup);
         if (drive is null && signInMode == SignInMode.Password)
             AddOption("Sign in with an API token", ShowTokenSignIn);
-        if (drive is null && saved is not null)
-            AddOption("Forget saved API token", ForgetSavedToken);
+        if (saved is not null)
+            AddOption("Forget saved sign-in", ForgetSavedSignIn);
         MoreButton.ContextMenu = menu;
         menu.IsOpen = true;
 
@@ -120,15 +159,16 @@ internal partial class MainWindow : Window
 
     private void ShowTokenSignIn()
     {
-        if (saved is not null && AddressBox.Text == "https://files.plexpoint.uk")
-            AddressBox.Text = saved.Address;
-        RememberToken.IsChecked = saved is not null;
+        bool hasToken = saved is { HasPassword: false, Token.Length: > 0 };
+        if (hasToken && AddressBox.Text == "https://files.plexpoint.uk")
+            AddressBox.Text = saved!.Address;
+        RememberToken.IsChecked = hasToken;
         SetSignInMode(SignInMode.Token);
-        ShowStatus(saved is not null ? "A saved API token can be used for its original server." : null, error: false);
+        ShowStatus(hasToken ? "A saved API token can be used for its original server." : null, error: false);
         TokenInput.Focus();
     }
 
-    private void ForgetSavedToken()
+    private void ForgetSavedSignIn()
     {
         try
         {
@@ -136,10 +176,13 @@ internal partial class MainWindow : Window
             saved = null;
             TokenInput.Clear();
             RememberToken.IsChecked = false;
-            ShowStatus("Saved API token removed.", error: false);
+            RememberLogin.IsChecked = false;
+            if (signInMode == SignInMode.Verification)
+                SetSignInMode(SignInMode.Password);
+            ShowStatus("Saved sign-in removed.", error: false);
         }
-        catch (IOException) { ShowStatus("Windows couldn’t remove the saved API token."); }
-        catch (UnauthorizedAccessException) { ShowStatus("Windows couldn’t remove the saved API token."); }
+        catch (IOException) { ShowStatus("Windows couldn’t remove the saved sign-in."); }
+        catch (UnauthorizedAccessException) { ShowStatus("Windows couldn’t remove the saved sign-in."); }
     }
 
     private void SetSignInMode(SignInMode mode)
@@ -221,9 +264,13 @@ internal partial class MainWindow : Window
         bool apiTokenMode = signInMode == SignInMode.Token;
         string user = UsernameBox.Text.Trim();
         string secret = apiTokenMode ? TokenInput.Password.Trim() : PasswordInput.Password;
-        bool usesSavedToken = apiTokenMode && secret.Length == 0 && saved?.Address == server.AbsoluteUri;
+        bool usesSavedToken = apiTokenMode && secret.Length == 0 &&
+            saved is { HasPassword: false, Token.Length: > 0 } && saved.Address == server.AbsoluteUri;
         if (usesSavedToken)
-            secret = saved!.Token;
+            secret = saved!.Token!;
+        if (signInMode == SignInMode.Verification && secret.Length == 0 &&
+            saved is { HasPassword: true } connection && connection.Address == server.AbsoluteUri && connection.Username == user)
+            secret = connection.Password!;
         string code = signInMode == SignInMode.Verification ? CodeBox.Text.Trim() : "";
         if (!apiTokenMode && user.Length == 0)
         {
@@ -247,7 +294,14 @@ internal partial class MainWindow : Window
             return;
         }
 
-        bool rememberToken = apiTokenMode && RememberToken.IsChecked == true;
+        bool remember = (apiTokenMode ? RememberToken.IsChecked : RememberLogin.IsChecked) == true;
+        await ConnectToServer(server, apiTokenMode, user, secret, code, remember,
+            usesSavedToken, openExplorer: true);
+    }
+
+    private async Task ConnectToServer(Uri server, bool apiTokenMode, string user, string secret, string code,
+        bool remember, bool usesSavedToken, bool openExplorer, SavedConnection? reconnect = null)
+    {
         bool focusCode = false;
         SetBusy(true);
         ConnectButton.Content = "Connecting…";
@@ -255,7 +309,7 @@ internal partial class MainWindow : Window
         try
         {
             drive = await Task.Run(() => MountedDrive.Connect(server, apiTokenMode, user, secret, code,
-                ReportUploadFailure, ReportRecycleFailure));
+                ReportUploadFailure, ReportRecycleFailure, reconnect));
             AddressBox.Text = server.AbsoluteUri.TrimEnd('/');
             PasswordInput.Clear();
             TokenInput.Clear();
@@ -263,24 +317,28 @@ internal partial class MainWindow : Window
             ShowConnected(server.Host);
             try
             {
-                if (rememberToken && !usesSavedToken)
+                if (reconnect is null && remember && !usesSavedToken)
                 {
-                    var connection = new SavedConnection(server.AbsoluteUri, secret);
+                    var connection = apiTokenMode ? new SavedConnection(server.AbsoluteUri, secret) :
+                        new SavedConnection(server.AbsoluteUri, code.Length > 0 ? drive.SessionToken : null, user, secret);
                     connection.Save();
                     saved = connection;
                 }
-                else if (apiTokenMode && !rememberToken && saved?.Address == server.AbsoluteUri)
+                else if (reconnect is null && !remember)
                 {
                     SavedConnection.Forget();
                     saved = null;
                 }
             }
-            catch (Exception) { ShowStatus("Connected. Windows couldn’t update the saved API token."); }
-            OpenExternal(drive.Path);
+            catch (Exception) { ShowStatus("Connected. Windows couldn’t update the saved sign-in."); }
+            if (openExplorer)
+                OpenExternal(drive.Path);
         }
         catch (VerificationRequiredException)
         {
             SetSignInMode(SignInMode.Verification);
+            if (reconnect is not null)
+                ShowStatus("Enter a new verification code to reconnect.", error: false);
             focusCode = true;
         }
         catch (Exception error)
@@ -290,8 +348,12 @@ internal partial class MainWindow : Window
             {
                 HttpRequestException { StatusCode: HttpStatusCode.Unauthorized } when signInMode == SignInMode.Verification =>
                     "FilePoint couldn’t verify that code. Try a new code from your authenticator app.",
+                HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden } when reconnect is not null =>
+                    "FilePoint couldn’t reuse your saved sign-in. Sign in again to reconnect.",
                 HttpRequestException { StatusCode: HttpStatusCode.Unauthorized } when !apiTokenMode =>
                     "FilePoint didn’t accept that username or password.",
+                HttpRequestException { StatusCode: HttpStatusCode.Unauthorized } when usesSavedToken =>
+                    "FilePoint didn’t accept the saved API token. Sign in again to open your drive.",
                 HttpRequestException { StatusCode: null } or OperationCanceledException =>
                     "FilePoint couldn’t reach the server. Check the address and your connection.",
                 DllNotFoundException or TypeInitializationException =>
@@ -450,7 +512,6 @@ internal partial class MainWindow : Window
     private void SetUpdate(GitHubUpdate? update)
     {
         availableUpdate = update;
-        UpdateBadge.Visibility = update is null ? Visibility.Collapsed : Visibility.Visible;
         MoreButton.ToolTip = update is null ? "Options" : $"Update {update.Version} available";
     }
 
@@ -475,13 +536,7 @@ internal partial class MainWindow : Window
             return;
         try
         {
-            using var setup = Process.Start(new ProcessStartInfo(installer)
-            {
-                UseShellExecute = true,
-                WorkingDirectory = Path.GetDirectoryName(installer)!
-            });
-            if (setup is null)
-                throw new IOException("Windows did not start FilePoint Setup.");
+            UpdateInstall.Start(installer);
             exitRequested = true;
             Close();
         }

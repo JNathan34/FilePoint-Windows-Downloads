@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
@@ -28,6 +29,7 @@ internal static class Program
         catch (VerificationRequiredException) { }
         Require(api.Login("A + B", "p+%£", "123456") == "fixture.header.signature", "Password login");
         Require(api.GetAccount().Scopes[0].Name == "Test source", "Account scopes");
+        TestRememberedSignIn();
         Require(api.GetConnectedDevices().Any(device => device.Name == "USB Drive" && device.Status == "ready"),
             "Use the web app's authenticated device feed");
         Require(api.GetDiskSpace() == new DiskSpace(20_000_000_000, 7_000_000_000),
@@ -166,10 +168,47 @@ internal static class Program
             throw new InvalidOperationException(name);
     }
 
+    private static void TestRememberedSignIn()
+    {
+        string address = "https://filepoint.example/";
+        string path = Path.Combine(Path.GetTempPath(), $"FilePoint-sign-in-{Guid.NewGuid():N}.bin");
+        var login = new SavedConnection(address, null, "A + B", "p+%£");
+        try
+        {
+            login.Save(path);
+            Require(SavedConnection.Load(path) == login &&
+                !Encoding.UTF8.GetString(File.ReadAllBytes(path)).Contains("p+%£", StringComparison.Ordinal),
+                "Remember a username and password in an encrypted Windows credential file");
+            using var api = new FilePointApi(new Uri(address), new Fixture { RequireVerificationCode = false });
+            Require(api.RestoreAccount(SavedConnection.Load(path)!).Username == "Test", "Reconnect with the stored password");
+            var verified = login with { Token = "fixture.header.signature" };
+            using var mfa = new FilePointApi(new Uri(address), new Fixture());
+            Require(mfa.RestoreAccount(verified).Username == "Test", "Reuse an active verified session without asking for another code");
+            try
+            {
+                mfa.RestoreAccount(verified with { Token = "expired.header.signature" });
+                throw new InvalidOperationException("An expired verified session must ask for a new code.");
+            }
+            catch (VerificationRequiredException) { }
+            File.WriteAllBytes(path, ProtectedData.Protect(
+                """{"Address":"https://filepoint.example/","Token":"fixture.header.signature"}"""u8.ToArray(),
+                null, DataProtectionScope.CurrentUser));
+            var legacy = SavedConnection.Load(path)!;
+            Require(!legacy.HasPassword && api.RestoreAccount(legacy).Username == "Test",
+                "Reconnect using an API token saved by an earlier FilePoint version");
+        }
+        finally
+        {
+            File.Delete(path);
+            File.Delete(path + ".tmp");
+        }
+    }
+
     private sealed class Fixture : HttpMessageHandler
     {
         internal string HomeScope { get; init; } = "/";
         internal volatile bool DeviceAttached = true;
+        internal bool RequireVerificationCode { get; init; } = true;
 
         protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -178,14 +217,17 @@ internal static class Program
             {
                 Require(request.Method == HttpMethod.Post && uri.Query == "?username=A%20%2B%20B", "Username encoding");
                 Require(request.Headers.GetValues("X-Password").Single() == "p%2B%25%C2%A3", "Password encoding");
-                if (!request.Headers.Contains("X-Secret"))
+                if (RequireVerificationCode && !request.Headers.Contains("X-Secret"))
                     return new(HttpStatusCode.Forbidden)
                     {
                         Content = new StringContent("""{"status":403,"message":"OTP code is required for user"}""")
                     };
-                Require(request.Headers.GetValues("X-Secret").Single() == "123456", "Verification code");
+                if (RequireVerificationCode)
+                    Require(request.Headers.GetValues("X-Secret").Single() == "123456", "Verification code");
                 return Text("fixture.header.signature");
             }
+            if (uri.AbsolutePath == "/api/users" && request.Headers.Authorization?.Parameter == "expired.header.signature")
+                return new(HttpStatusCode.Unauthorized);
             Require(request.Headers.Authorization?.Parameter == "fixture.header.signature", "Bearer authentication");
             return uri.AbsolutePath switch
             {

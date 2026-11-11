@@ -161,11 +161,17 @@
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
                     <Border x:Name="Item" Background="Transparent" CornerRadius="4" Padding="11,8">
-                        <ContentPresenter ContentSource="Header" RecognizesAccessKey="True" />
+                        <DockPanel>
+                            <TextBlock x:Name="Check" DockPanel.Dock="Right" Text="✓" Margin="12,0,0,0" Visibility="Collapsed" />
+                            <ContentPresenter ContentSource="Header" RecognizesAccessKey="True" />
+                        </DockPanel>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="Item" Property="Background" Value="#3B4047" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Check" Property="Visibility" Value="Visible" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

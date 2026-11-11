@@ -5,26 +5,36 @@ using System.Text.Json;
 
 namespace FilePoint.Windows;
 
-internal sealed record SavedConnection(string Address, string Token)
+internal sealed record SavedConnection(string Address, string? Token, string? Username = null, string? Password = null)
 {
+    internal bool HasPassword => !string.IsNullOrEmpty(Username) && !string.IsNullOrEmpty(Password);
     private static readonly string PathName = Path.Combine(ExplorerIntegration.DataPath, "connection.bin");
 
-    internal static SavedConnection? Load()
+    internal static SavedConnection? Load(string? path = null)
     {
-        if (!File.Exists(PathName))
+        path ??= PathName;
+        if (!File.Exists(path))
             return null;
-        return JsonSerializer.Deserialize<SavedConnection>(
-            ProtectedData.Unprotect(File.ReadAllBytes(PathName), null, DataProtectionScope.CurrentUser));
+        byte[] plaintext = ProtectedData.Unprotect(File.ReadAllBytes(path), null, DataProtectionScope.CurrentUser);
+        try { return JsonSerializer.Deserialize<SavedConnection>(plaintext); }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
     }
 
-    internal void Save()
+    internal void Save(string? path = null)
     {
-        Directory.CreateDirectory(ExplorerIntegration.DataPath);
-        string temporary = PathName + ".tmp";
-        File.WriteAllBytes(temporary, ProtectedData.Protect(
-            JsonSerializer.SerializeToUtf8Bytes(this), null, DataProtectionScope.CurrentUser));
-        File.Move(temporary, PathName, overwrite: true);
+        path ??= PathName;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string temporary = path + ".tmp";
+        byte[] plaintext = JsonSerializer.SerializeToUtf8Bytes(this);
+        try
+        {
+            File.WriteAllBytes(temporary, ProtectedData.Protect(plaintext, null, DataProtectionScope.CurrentUser));
+            File.Move(temporary, path, overwrite: true);
+        }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
     }
+
+    public override string ToString() => nameof(SavedConnection);
 
     internal static void Forget()
     {

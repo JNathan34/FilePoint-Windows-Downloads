@@ -74,6 +74,27 @@ internal sealed class FilePointApi : IDisposable
         return token;
     }
 
+    internal Account RestoreAccount(SavedConnection connection)
+    {
+        if (!string.Equals(connection.Address, client.BaseAddress!.AbsoluteUri, StringComparison.Ordinal))
+            throw new ArgumentException("The saved sign-in belongs to a different server.");
+        if (connection.Token is { Length: > 0 } token)
+        {
+            UseToken(token);
+            try { return GetAccount(); }
+            catch (HttpRequestException error) when (connection.HasPassword &&
+                error.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                client.DefaultRequestHeaders.Authorization = null;
+            }
+        }
+
+        if (!connection.HasPassword)
+            throw new InvalidDataException("FilePoint couldn’t read the saved sign-in.");
+        Login(connection.Username!, connection.Password!, "");
+        return GetAccount();
+    }
+
     private static bool RequiresVerification(HttpResponseMessage response)
     {
         const string challenge = "OTP code is required for user";

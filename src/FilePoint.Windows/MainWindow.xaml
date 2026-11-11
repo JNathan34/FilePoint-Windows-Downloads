@@ -21,15 +21,11 @@
                 <Button x:Name="MoreButton" Grid.Column="1" Width="34" Height="32" Padding="0"
                         Style="{StaticResource QuietButton}" ToolTip="Options"
                         AutomationProperties.Name="FilePoint options" KeyboardNavigation.TabIndex="20" Click="OpenOptions">
-                    <Grid>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <Ellipse Width="3" Height="3" Fill="{StaticResource MutedBrush}" />
-                            <Ellipse Width="3" Height="3" Margin="4,0" Fill="{StaticResource MutedBrush}" />
-                            <Ellipse Width="3" Height="3" Fill="{StaticResource MutedBrush}" />
-                        </StackPanel>
-                        <Ellipse x:Name="UpdateBadge" Width="6" Height="6" Fill="{StaticResource FocusBrush}"
-                                 Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,5,5,0" />
-                    </Grid>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Ellipse Width="3" Height="3" Fill="{StaticResource MutedBrush}" />
+                        <Ellipse Width="3" Height="3" Margin="4,0" Fill="{StaticResource MutedBrush}" />
+                        <Ellipse Width="3" Height="3" Fill="{StaticResource MutedBrush}" />
+                    </StackPanel>
                 </Button>
             </Grid>
 
@@ -92,6 +88,8 @@
                                         </Button>
                                     </Grid>
                                 </Border>
+                                <CheckBox x:Name="RememberLogin" Content="Keep me signed in on this PC"
+                                          Margin="0,13,0,0" KeyboardNavigation.TabIndex="4" />
                             </StackPanel>
                             <StackPanel x:Name="TokenFields" Visibility="Collapsed">
                                 <Label x:Name="TokenLabel" Content="FilePoint API token" Target="{Binding ElementName=TokenInput}" Margin="0,15,0,7" />
@@ -107,10 +105,10 @@
                                      AutomationProperties.LabeledBy="{Binding ElementName=CodeLabel}" />
                         </StackPanel>
 
-                        <Button x:Name="ConnectButton" Content="Connect" IsDefault="True" KeyboardNavigation.TabIndex="4"
+                        <Button x:Name="ConnectButton" Content="Connect" IsDefault="True" KeyboardNavigation.TabIndex="5"
                                 MinHeight="42" Style="{StaticResource PrimaryButton}" Margin="0,20,0,0" Click="Connect" />
                         <Button x:Name="BackButton" Visibility="Collapsed" Content="Back to sign-in" HorizontalAlignment="Center"
-                                Style="{StaticResource QuietButton}" Margin="0,7,0,0" KeyboardNavigation.TabIndex="5" Click="BackToSignIn" />
+                                Style="{StaticResource QuietButton}" Margin="0,7,0,0" KeyboardNavigation.TabIndex="6" Click="BackToSignIn" />
                     </StackPanel>
 
                     <StackPanel x:Name="ConnectedPanel" Visibility="Collapsed">

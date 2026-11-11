@@ -145,7 +145,7 @@ internal sealed class UpdateWindow : Window
         available = update;
         heading.Text = update is null ? "FilePoint is up to date" : $"FilePoint {update.Version} is available";
         status.Text = update is null ? "You have the latest stable release." :
-            "FilePoint will download the update, close, and open Setup.";
+            "FilePoint will close during installation and reopen when the update is ready.";
         action.Content = update is null ? "Check again" : "Install update";
     }
 }

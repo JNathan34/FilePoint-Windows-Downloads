@@ -10,10 +10,12 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        bool startInTray = Array.Exists(args, argument => argument == WindowsStartup.Argument);
         using var instance = new Mutex(true, @"Local\FilePoint.Windows.5EF65D30", out bool owner);
         if (!owner)
         {
-            if (!Array.Exists(args, argument => argument == "--remove-integration"))
+            if (!startInTray && !Array.Exists(args, argument =>
+                argument is "--remove-integration" or UpdateInstall.ReopenArgument))
                 MessageBox.Show("FilePoint is already running. Open it from the notification area.",
                     "FilePoint", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
@@ -26,18 +28,28 @@ internal static class Program
         }
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         UiTheme.Load(app);
-        app.Run(new MainWindow());
+        var window = new MainWindow();
+        app.Startup += async (_, _) => await window.Start(startInTray);
+        if (!startInTray)
+        {
+            app.Run(window);
+            return;
+        }
+
+        app.MainWindow = window;
+        app.Run();
     }
 }
 
 internal sealed class MountedDrive(DriveMount host, FilePointApi api, Account account, FilePointDrive fileSystem,
-    bool hasRecycleBin) : IDisposable
+    bool hasRecycleBin, string? sessionToken) : IDisposable
 {
     internal string Username => account.Username;
     internal string Path => host.Path;
     internal bool HasRecycleBin { get; } = hasRecycleBin;
     internal bool CanRestore => account.CanRestore;
     internal bool CanDelete => account.CanDelete;
+    internal string? SessionToken { get; } = sessionToken;
 
     internal RecycledItem[] ListRecycledItems() => api.ListRecycledItems();
 
@@ -49,17 +61,24 @@ internal sealed class MountedDrive(DriveMount host, FilePointApi api, Account ac
     }
 
     internal static MountedDrive Connect(Uri server, bool apiTokenMode, string name, string secret, string code,
-        Action<string> uploadFailed, Action<string> recycleFailed)
+        Action<string> uploadFailed, Action<string> recycleFailed, SavedConnection? reconnect = null)
     {
         var api = new FilePointApi(server);
         DriveMount? host = null;
         try
         {
-            if (apiTokenMode)
-                api.UseToken(secret);
+            string? sessionToken = null;
+            Account account;
+            if (reconnect is not null)
+                account = api.RestoreAccount(reconnect);
             else
-                api.Login(name, secret, code);
-            var account = api.GetAccount();
+            {
+                if (apiTokenMode)
+                    api.UseToken(secret);
+                else
+                    sessionToken = api.Login(name, secret, code);
+                account = api.GetAccount();
+            }
             if (account.Scopes is not { Length: > 0 })
                 throw new UnauthorizedAccessException("This FilePoint account has no storage sources.");
             using var identity = WindowsIdentity.GetCurrent();
@@ -69,7 +88,7 @@ internal sealed class MountedDrive(DriveMount host, FilePointApi api, Account ac
                 hasRecycleBin && account.CanDelete, recycleFailed, hasRecycleBin);
             host = new DriveMount(fileSystem);
             ExplorerIntegration.Register(host.Path);
-            return new MountedDrive(host, api, account, fileSystem, hasRecycleBin);
+            return new MountedDrive(host, api, account, fileSystem, hasRecycleBin, sessionToken);
         }
         catch
         {

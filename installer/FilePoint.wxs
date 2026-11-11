@@ -38,10 +38,12 @@
           <RemoveFile Id="PendingConnection" Name="connection.bin.tmp" On="uninstall" />
           <RemoveFile Id="SavedGitHubToken" Name="github.bin" On="uninstall" />
           <RemoveFile Id="PendingGitHubToken" Name="github.bin.tmp" On="uninstall" />
+          <RemoveFile Id="RemoveStartupShortcut" Directory="StartupFolder" Name="FilePoint for Windows.lnk" On="uninstall" />
           <RemoveFolder Id="RemoveSettingsFolder" On="uninstall" />
         </Component>
       </Directory>
     </StandardDirectory>
+    <StandardDirectory Id="StartupFolder" />
     <Feature Id="Main" Title="FilePoint for Windows" Level="1">
       <ComponentRef Id="Client" />
       <ComponentRef Id="ClientAssets" />
