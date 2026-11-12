@@ -126,7 +126,7 @@
                         <WrapPanel HorizontalAlignment="Right" Margin="0,20,0,0">
                             <Button x:Name="DisconnectButton" Content="Disconnect" Margin="0,0,8,0"
                                     Style="{StaticResource QuietButton}" Click="Disconnect" />
-                            <Button Content="Open File Explorer" Style="{StaticResource PrimaryButton}" Click="Browse" />
+                            <Button x:Name="BrowseButton" Content="Open File Explorer" Style="{StaticResource PrimaryButton}" Click="Browse" />
                         </WrapPanel>
                     </StackPanel>
 

@@ -14,20 +14,23 @@ internal sealed class DriveMount : IDisposable
     private readonly DokanInstance instance;
 
     internal string Path { get; }
+    internal bool IsRunning => instance.IsFileSystemRunning();
 
-    internal DriveMount(FilePointDrive fileSystem)
+    internal DriveMount(FilePointDrive fileSystem, string? preferredPath = null)
     {
-        string path = PickPath(Directory.GetLogicalDrives())
+        string[] occupied = Directory.GetLogicalDrives();
+        string path = (preferredPath is not null && !occupied.Contains(preferredPath, StringComparer.OrdinalIgnoreCase)
+            ? preferredPath : PickPath(occupied))
             ?? throw new IOException("Windows has no available drive letters.");
         driver = new Dokan(new NullLogger());
         DokanInstance? mounted = null;
         try
         {
             try { mounted = MountAt(path); }
-            catch (DokanException error) when (path == @"F:\" &&
+            catch (DokanException error) when ((path == @"F:\" || path == preferredPath) &&
                 error.ErrorStatus is DokanStatus.DriveLetterError or DokanStatus.MountError)
             {
-                path = PickPath([.. Directory.GetLogicalDrives(), @"F:\"]) ?? throw new IOException(
+                path = PickPath([.. Directory.GetLogicalDrives(), path]) ?? throw new IOException(
                     "Windows has no fallback drive letter available.", error);
                 mounted = MountAt(path);
             }

@@ -62,6 +62,7 @@
 - The **Connected devices** folder shows USB drives and phones that the FilePoint server has mounted and your account can access. Refresh the folder after connecting or disconnecting a device.
 - Files open on demand while you’re connected. On servers that enable Windows writes, Explorer can create, edit, copy, rename, and move files and folders in writable sources. Moves between sources use Explorer’s copy and delete flow. Deleted items are recoverable in the FilePoint web app’s Recycle Bin when the server supports it. Your FilePoint account determines where you can write.
 - Minimize FilePoint to keep it in the notification area. Double-click the tray icon to reopen it, or select **Quit FilePoint** to unmount the drive.
+- If Windows drops the Explorer drive during sleep, FilePoint tries to restore it using your current connection when the PC wakes. It reuses the previous drive letter when available.
 
 ## Updates
 

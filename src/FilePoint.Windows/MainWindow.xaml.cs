@@ -23,6 +23,7 @@ internal partial class MainWindow : Window
     private readonly Forms.NotifyIcon tray;
     private readonly TrayMenu trayMenu;
     private readonly DispatcherTimer updateTimer = new() { Interval = TimeSpan.FromHours(6) };
+    private readonly DispatcherTimer mountTimer = new() { Interval = TimeSpan.FromSeconds(10) };
     private GitHubUpdate? availableUpdate;
     private Version? notifiedVersion;
     private bool checkingUpdate;
@@ -66,6 +67,7 @@ internal partial class MainWindow : Window
             StartUpdateChecks();
         };
         updateTimer.Tick += async (_, _) => await CheckForUpdate();
+        mountTimer.Tick += async (_, _) => await RestoreMissingDrive();
         StateChanged += (_, _) =>
         {
             if (WindowState == WindowState.Minimized)
@@ -85,6 +87,7 @@ internal partial class MainWindow : Window
         Closed += (_, _) =>
         {
             updateTimer.Stop();
+            mountTimer.Stop();
             PasswordInput.Clear();
             RevealedPassword.Clear();
             TokenInput.Clear();
@@ -315,6 +318,7 @@ internal partial class MainWindow : Window
             TokenInput.Clear();
             CodeBox.Clear();
             ShowConnected(server.Host);
+            mountTimer.Start();
             try
             {
                 if (reconnect is null && remember && !usesSavedToken)
@@ -331,8 +335,8 @@ internal partial class MainWindow : Window
                 }
             }
             catch (Exception) { ShowStatus("Connected. Windows couldn’t update the saved sign-in."); }
-            if (openExplorer)
-                OpenExternal(drive.Path);
+            if (openExplorer && drive.Path is { } path)
+                OpenExternal(path);
         }
         catch (VerificationRequiredException)
         {
@@ -383,14 +387,39 @@ internal partial class MainWindow : Window
         ServerName.Text = host;
         Heading.Text = "Connected";
         Introduction.Text = "Your FilePoint drive is ready.";
+        BrowseButton.IsEnabled = true;
         SignInPanel.Visibility = Visibility.Collapsed;
         ConnectedPanel.Visibility = Visibility.Visible;
+    }
+
+    private async Task RestoreMissingDrive()
+    {
+        if (busy || exitRequested || showingUpdates || showingRecycleBin || drive is not { } mounted || mounted.IsRunning)
+            return;
+
+        SetBusy(true);
+        BrowseButton.IsEnabled = false;
+        Introduction.Text = "Reconnecting your FilePoint drive…";
+        try
+        {
+            await Task.Run(mounted.RestoreMount);
+            ShowConnected(ServerName.Text);
+        }
+        catch (Exception)
+        {
+            Introduction.Text = "FilePoint couldn’t reopen the drive. It will try again shortly.";
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private async void Disconnect(object sender, RoutedEventArgs args)
     {
         if (busy || drive is not { } mounted)
             return;
+        mountTimer.Stop();
         SetBusy(true);
         DisconnectButton.Content = "Disconnecting…";
         ShowStatus(null);
@@ -441,8 +470,8 @@ internal partial class MainWindow : Window
 
     private void OpenDrive()
     {
-        if (drive is { } mounted && !busy)
-            OpenExternal(mounted.Path);
+        if (!busy && drive?.Path is { } path)
+            OpenExternal(path);
     }
 
     private void OpenExternal(string target)

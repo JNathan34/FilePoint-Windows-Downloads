@@ -42,10 +42,14 @@ internal static class Program
 }
 
 internal sealed class MountedDrive(DriveMount host, FilePointApi api, Account account, FilePointDrive fileSystem,
-    bool hasRecycleBin, string? sessionToken) : IDisposable
+    Func<FilePointDrive> createFileSystem, bool hasRecycleBin, string? sessionToken) : IDisposable
 {
+    private DriveMount? mount = host;
+    private string preferredPath = host.Path;
+
     internal string Username => account.Username;
-    internal string Path => host.Path;
+    internal string? Path => mount?.Path;
+    internal bool IsRunning => mount?.IsRunning == true;
     internal bool HasRecycleBin { get; } = hasRecycleBin;
     internal bool CanRestore => account.CanRestore;
     internal bool CanDelete => account.CanDelete;
@@ -82,13 +86,16 @@ internal sealed class MountedDrive(DriveMount host, FilePointApi api, Account ac
             if (account.Scopes is not { Length: > 0 })
                 throw new UnauthorizedAccessException("This FilePoint account has no storage sources.");
             using var identity = WindowsIdentity.GetCurrent();
+            var user = identity.User!;
             var sources = api.GetWritableSources();
             bool hasRecycleBin = api.SupportsRecycleBin();
-            var fileSystem = new FilePointDrive(api, new FolderIcons(), identity.User!, sources, uploadFailed,
+            var icons = new FolderIcons();
+            FilePointDrive CreateFileSystem() => new(api, icons, user, sources, uploadFailed,
                 hasRecycleBin && account.CanDelete, recycleFailed, hasRecycleBin);
+            var fileSystem = CreateFileSystem();
             host = new DriveMount(fileSystem);
             ExplorerIntegration.Register(host.Path);
-            return new MountedDrive(host, api, account, fileSystem, hasRecycleBin, sessionToken);
+            return new MountedDrive(host, api, account, fileSystem, CreateFileSystem, hasRecycleBin, sessionToken);
         }
         catch
         {
@@ -102,12 +109,32 @@ internal sealed class MountedDrive(DriveMount host, FilePointApi api, Account ac
         }
     }
 
+    internal void RestoreMount()
+    {
+        var previous = mount;
+        mount = null;
+        try { ExplorerIntegration.Unregister(); }
+        finally { previous?.Dispose(); }
+
+        var restoredFileSystem = createFileSystem();
+        var restored = new DriveMount(restoredFileSystem, preferredPath);
+        try { ExplorerIntegration.Register(restored.Path); }
+        catch
+        {
+            restored.Dispose();
+            throw;
+        }
+        fileSystem = restoredFileSystem;
+        preferredPath = restored.Path;
+        mount = restored;
+    }
+
     public void Dispose()
     {
         try { ExplorerIntegration.Unregister(); }
         finally
         {
-            host.Dispose();
+            mount?.Dispose();
             api.Dispose();
         }
     }

@@ -71,6 +71,7 @@ internal static class Program
         if (args.Contains("--native"))
         {
             TestNative(api, icons, fixture);
+            TestRemount(api, icons);
             WriteTests.Run();
         }
         SignInTests.Run(args);
@@ -139,6 +140,26 @@ internal static class Program
         catch (Exception error) when (error is UnauthorizedAccessException or IOException) { blocked = true; }
         Require(blocked && !File.Exists(Path.Combine(source, "blocked.txt")), "Read-only mount");
         Console.WriteLine("Passed native mount, server capacity, file open, Shell icons, and read-only enforcement.");
+    }
+
+    private static void TestRemount(FilePointApi api, FolderIcons icons)
+    {
+        using var identity = WindowsIdentity.GetCurrent();
+        var user = identity.User!;
+        string mount;
+        using (var host = new DriveMount(new FilePointDrive(api, icons, user)))
+        {
+            mount = host.Path;
+            Require(host.IsRunning, "A healthy mount is detected as running");
+            using var driver = new Dokan(new DokanNet.Logging.NullLogger());
+            Require(driver.RemoveMountPoint(mount), "Simulate Windows losing the FilePoint mount");
+            Require(SpinWait.SpinUntil(() => !host.IsRunning, TimeSpan.FromSeconds(10)), "Detect the dropped mount");
+        }
+        using var restored = new DriveMount(new FilePointDrive(api, icons, user), mount);
+        Require(restored.IsRunning && restored.Path == mount &&
+            File.ReadAllText(Path.Combine(mount, "Test source", "FILE.txt")) == "0123456789AB",
+            "Restore the same drive letter and read files with the existing sign-in");
+        Console.WriteLine("Passed dropped-drive detection and remount with the existing session.");
     }
 
     private static void CheckShellIcon(string path, string expectedName)
